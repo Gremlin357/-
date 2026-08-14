@@ -8,7 +8,6 @@ import { createPine3 } from "../models/pine3.js";
 import planUrl from "../генплан для Codex.svg?url";
 
 const host = document.querySelector("#scene");
-const card = document.querySelector("#plot-card");
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(host.clientWidth, host.clientHeight);
@@ -19,6 +18,9 @@ host.appendChild(renderer.domElement);
 const cameraReadout = document.createElement("div");
 cameraReadout.className = "camera-readout";
 host.appendChild(cameraReadout);
+const plotLabel = document.createElement("div");
+plotLabel.className = "plot-label";
+host.appendChild(plotLabel);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xc9dce1);
@@ -144,6 +146,12 @@ scene.add(sunSprite);
 const map = new THREE.Group();
 scene.add(map);
 const plotMeshes = [];
+const publicMeshes = [];
+const publicLabels = [null, "Магазин", "Детская площадка", "Фруктовый сад", null, "Спортивная площадка"];
+const firstQueueNumbers = new Map([
+  [57, 30], [49, 29], [48, 28], [50, 27], [51, 26], [52, 25], [53, 24], [71, 23],
+  [31, 21], [38, 20], [39, 19], [40, 18], [41, 17], [85, 16], [82, 58], [83, 59], [76, 60],
+]);
 let hoveredPlot = null;
 const pointer = new THREE.Vector2();
 const raycaster = new THREE.Raycaster();
@@ -324,7 +332,15 @@ function addTerritory(path, definition) {
     map.add(mesh);
     if (definition.isPlot) {
       mesh.userData.plotHighlight = addPlotOutline(shape, definition.elevation + definition.height);
+      const points = shape.extractPoints(8).shape;
+      const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
+      mesh.userData.plotCenter = center;
+      mesh.userData.plotNumber = firstQueueNumbers.get(plotMeshes.length) ?? null;
       plotMeshes.push(mesh);
+    } else if (definition.color === 0xeae3ca) {
+      const points = shape.extractPoints(8).shape;
+      const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
+      publicMeshes.push({ mesh, point: worldPoint(center), name: publicLabels[publicMeshes.length] ?? null });
     }
   });
     if (definition.color === 0x59a37e) {
@@ -570,7 +586,6 @@ async function buildModel() {
   seedPines();
   controls.target.copy(settlementTarget);
   controls.update();
-  card.innerHTML = "<span class=\"eyebrow\">SVG</span><h1>3D генплан</h1><p>Все зоны и дома построены по векторным контурам исходного генплана.</p>";
 }
 
 function setCamera(position) {
@@ -580,23 +595,38 @@ function setCamera(position) {
 }
 
 document.querySelector("#reset-camera").addEventListener("click", () => setCamera([-17, 40, -42]));
-document.querySelectorAll(".queue-button").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".queue-button").forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-  });
-});
-
 renderer.domElement.addEventListener("pointermove", (event) => {
   const bounds = renderer.domElement.getBoundingClientRect();
   pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
   pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const hit = raycaster.intersectObjects(plotMeshes, false)[0]?.object || null;
-  if (hoveredPlot === hit) return;
+  if (hoveredPlot === hit) {
+    if (hit?.userData.plotNumber) {
+      plotLabel.style.left = `${event.clientX + 14}px`;
+      plotLabel.style.top = `${event.clientY - 34}px`;
+    }
+    return;
+  }
   if (hoveredPlot) hoveredPlot.userData.plotHighlight.visible = false;
   hoveredPlot = hit;
-  if (hoveredPlot) hoveredPlot.userData.plotHighlight.visible = true;
+  if (hoveredPlot) {
+    hoveredPlot.userData.plotHighlight.visible = true;
+    if (hoveredPlot.userData.plotNumber) {
+      plotLabel.textContent = hoveredPlot.userData.plotNumber;
+      plotLabel.style.left = `${event.clientX + 14}px`;
+      plotLabel.style.top = `${event.clientY - 34}px`;
+      plotLabel.classList.add("visible");
+    }
+  } else {
+    plotLabel.classList.remove("visible");
+  }
+});
+
+renderer.domElement.addEventListener("pointerleave", () => {
+  if (hoveredPlot) hoveredPlot.userData.plotHighlight.visible = false;
+  hoveredPlot = null;
+  plotLabel.classList.remove("visible");
 });
 
 window.addEventListener("resize", () => {
@@ -607,6 +637,24 @@ window.addEventListener("resize", () => {
 
 function animate() {
   controls.update();
+  publicMeshes.forEach(({ mesh, point, name }) => {
+    if (!name) return;
+    const projected = new THREE.Vector3(point.x, mesh.position.y + 0.45, point.y).project(camera);
+    const visible = projected.z > -1 && projected.z < 1;
+    if (!mesh.userData.publicLabel) {
+      const label = document.createElement("div");
+      label.className = "public-label";
+      label.textContent = name;
+      host.appendChild(label);
+      mesh.userData.publicLabel = label;
+    }
+    const label = mesh.userData.publicLabel;
+    label.style.display = visible ? "block" : "none";
+    if (visible) {
+      label.style.left = `${(projected.x * 0.5 + 0.5) * host.clientWidth}px`;
+      label.style.top = `${(-projected.y * 0.5 + 0.5) * host.clientHeight}px`;
+    }
+  });
   cloudGroup.children.forEach((cloud) => {
     cloud.position.x += cloud.userData.speed;
     if (cloud.position.x > 210) cloud.position.x = -210;
@@ -621,7 +669,7 @@ function animate() {
 }
 
 buildModel().catch((error) => {
-  card.innerHTML = `<h1>Ошибка</h1><p>${error.message}</p>`;
+  console.error(error);
   console.error(error);
 });
 animate();
