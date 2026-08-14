@@ -187,6 +187,21 @@ select {
   inset: 0;
 }
 
+.camera-readout {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 3;
+  max-width: calc(100% - 28px);
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  background: rgba(24, 40, 30, 0.78);
+  color: #f4f8ee;
+  font: 12px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+  pointer-events: none;
+}
+
 .toolbar {
   position: absolute;
   right: 18px;

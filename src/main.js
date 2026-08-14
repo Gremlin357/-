@@ -16,17 +16,29 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 host.appendChild(renderer.domElement);
+const cameraReadout = document.createElement("div");
+cameraReadout.className = "camera-readout";
+host.appendChild(cameraReadout);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xc9dce1);
 scene.fog = new THREE.Fog(0xc9dce1, 135, 270);
 const camera = new THREE.PerspectiveCamera(41, host.clientWidth / host.clientHeight, 0.1, 500);
-camera.position.set(0, 84, 100);
+camera.position.set(-17, 40, -42);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.48;
 controls.minDistance = 30;
 controls.maxDistance = 190;
+const updateCameraReadout = () => {
+  const format = (value) => value.toFixed(2);
+  cameraReadout.textContent = `Камера: [${camera.position.toArray().map(format).join(", ")}] | Цель: [${controls.target.toArray().map(format).join(", ")}]`;
+};
+controls.addEventListener("change", () => {
+  console.log("Camera:", camera.position.toArray(), "Target:", controls.target.toArray());
+  updateCameraReadout();
+});
+updateCameraReadout();
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x758775, 2.5));
 const sun = new THREE.DirectionalLight(0xffffff, 2.8);
@@ -131,11 +143,15 @@ scene.add(sunSprite);
 
 const map = new THREE.Group();
 scene.add(map);
+const plotMeshes = [];
+let hoveredPlot = null;
+const pointer = new THREE.Vector2();
+const raycaster = new THREE.Raycaster();
 const environment = new THREE.Group();
 scene.add(environment);
 const environmentGround = new THREE.Mesh(
   new THREE.PlaneGeometry(2000, 1600),
-  new THREE.MeshStandardMaterial({ color: 0xd7ead2, roughness: 1 }),
+  new THREE.MeshStandardMaterial({ color: 0xc2df78, roughness: 1 }),
 );
 environmentGround.rotation.x = -Math.PI / 2;
 environmentGround.position.y = -0.08;
@@ -165,16 +181,18 @@ const WORLD_W = 160;
 const SCALE = WORLD_W / SVG_W;
 const SVG_OFFSET_X = 4961;
 const SVG_OFFSET_Y = 9221;
-const settlementTarget = new THREE.Vector3(-13, 0, -1);
+const settlementTarget = new THREE.Vector3(7, -6, 7);
+const HEIGHT_UNIT = 0.06;
 
 const layers = {
-  "#D7EAD2": { name: "Территория вне поселка", elevation: 0, height: 0.1, color: 0xd7ead2 },
-  "#B7DAD2": { name: "Общая территория", elevation: 0.12, height: 0.12, color: 0xb7dad2 },
-  "#C8D6D9": { name: "Региональная дорога", elevation: 0.26, height: 0.12, color: 0xc8d6d9 },
-  "#9AA0A3": { name: "Дороги поселка", elevation: 0.4, height: 0.12, color: 0x9aa0a3 },
-  "#59A37E": { name: "Лес", elevation: 0.54, height: 0.12, color: 0x59a37e },
-  "#EAE3CA": { name: "Общественные пространства", elevation: 0.68, height: 0.12, color: 0xeae3ca },
-  "#CD80DD": { name: "Участки домов", elevation: 0.82, height: 0.12, color: 0xcd80dd },
+  "#93CE84": { name: "Территория вне поселка", elevation: 0, height: 0.1, color: 0xc2df78 },
+  "#B7DAD2": { name: "Общая территория", elevation: HEIGHT_UNIT * 1.5, height: HEIGHT_UNIT, color: 0xb7dad2 },
+  "#98B4BA": { name: "Региональная дорога", elevation: HEIGHT_UNIT * 2, height: HEIGHT_UNIT, color: 0x98b4ba },
+  "#D3D7DE": { name: "Обочина", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT * 0.8, color: 0xd3d7de },
+  "#9AA0A3": { name: "Дороги поселка", elevation: HEIGHT_UNIT * 2, height: HEIGHT_UNIT, color: 0x9aa0a3 },
+  "#59A37E": { name: "Лес", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT, color: 0x59a37e },
+  "#EAE3CA": { name: "Общественные места", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xeae3ca },
+  "#CD80DD": { name: "Участки домов", elevation: HEIGHT_UNIT * 2.5, height: HEIGHT_UNIT, color: 0xcee593, isPlot: true },
 };
 const forestPolygons = [];
 const treeTrunk = new THREE.MeshStandardMaterial({ color: 0x75583d, roughness: 0.9, depthTest: false, depthWrite: false });
@@ -241,16 +259,75 @@ function extrudeShape(shape, height, material) {
   return mesh;
 }
 
+function flatTexturedShape(shape, material) {
+  const geometry = new THREE.ShapeGeometry(shape);
+  geometry.translate(-SVG_OFFSET_X, -SVG_OFFSET_Y, 0);
+  geometry.scale(-SCALE, SCALE, 1);
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate(SVG_W * SCALE / 2, 0, SVG_H * SCALE / 2);
+  const positions = geometry.getAttribute("position");
+  const uvs = new Float32Array(positions.count * 2);
+  for (let index = 0; index < positions.count; index += 1) {
+    uvs[index * 2] = positions.getX(index) / 12;
+    uvs[index * 2 + 1] = positions.getZ(index) / 12;
+  }
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function addPlotOutline(shape, elevation) {
+  const points = shape.extractPoints(8).shape;
+  const positions = new Float32Array(points.length * 3);
+  const y = elevation + HEIGHT_UNIT * 2;
+  points.forEach((point, index) => {
+    const world = worldPoint(point);
+    positions[index * 3] = world.x;
+    positions[index * 3 + 1] = y;
+    positions[index * 3 + 2] = world.y;
+  });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const line = new THREE.LineLoop(
+    geometry,
+    new THREE.LineBasicMaterial({ color: 0x557a3b, transparent: false, depthTest: true }),
+  );
+  line.renderOrder = 110;
+  map.add(line);
+  const highlight = line.clone();
+  highlight.material = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+  highlight.position.y = 0.1;
+  highlight.renderOrder = 111;
+  highlight.visible = false;
+  map.add(highlight);
+  return highlight;
+}
+
 function addTerritory(path, definition) {
-  const material = new THREE.MeshStandardMaterial({ color: definition.color, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  const material = new THREE.MeshStandardMaterial({
+    color: definition.color,
+    roughness: 0.9,
+    side: THREE.DoubleSide,
+    transparent: false,
+    opacity: 1,
+    depthWrite: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
   const shapes = SVGLoader.createShapes(path);
   shapes.forEach((shape) => {
-    const mesh = extrudeShape(shape, definition.height, material);
+    const mesh = flatTexturedShape(shape, material);
     mesh.position.y = definition.elevation;
     mesh.renderOrder = Math.round(definition.elevation * 100);
     map.add(mesh);
+    if (definition.isPlot) {
+      mesh.userData.plotHighlight = addPlotOutline(shape, definition.elevation + definition.height);
+      plotMeshes.push(mesh);
+    }
   });
-  if (definition.color === 0x59a37e) {
+    if (definition.color === 0x59a37e) {
     shapes.forEach((shape) => forestPolygons.push(shape.extractPoints(8).shape));
   }
 }
@@ -502,13 +579,25 @@ function setCamera(position) {
   controls.update();
 }
 
-document.querySelector("#reset-camera").addEventListener("click", () => setCamera([-13, 84, 97]));
+document.querySelector("#reset-camera").addEventListener("click", () => setCamera([-17, 40, -42]));
 document.querySelector("#top-camera").addEventListener("click", () => setCamera([-13, 132, -1.1]));
 document.querySelectorAll(".queue-button").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".queue-button").forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
   });
+});
+
+renderer.domElement.addEventListener("pointermove", (event) => {
+  const bounds = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+  pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObjects(plotMeshes, false)[0]?.object || null;
+  if (hoveredPlot === hit) return;
+  if (hoveredPlot) hoveredPlot.userData.plotHighlight.visible = false;
+  hoveredPlot = hit;
+  if (hoveredPlot) hoveredPlot.userData.plotHighlight.visible = true;
 });
 
 window.addEventListener("resize", () => {
