@@ -5,6 +5,17 @@ import { Sky } from "three/addons/objects/Sky.js";
 import { createPine1 } from "../models/pine1.js";
 import { createPine2 } from "../models/pine2.js";
 import { createPine3 } from "../models/pine3.js";
+import { createCar1 } from "../models/car1.js";
+import { createCar2 } from "../models/car2.js";
+import { createCar3 } from "../models/car3.js";
+import { createFruitTree1 } from "../models/fruitTree1.js";
+import { createFruitTree2 } from "../models/fruitTree2.js";
+import { createFruitTree3 } from "../models/fruitTree3.js";
+import { createSlide } from "../models/slide.js";
+import { createCarousel } from "../models/carousel.js";
+import { createSandbox } from "../models/sandbox.js";
+import { createClimbingFrame } from "../models/climbingFrame.js";
+import { createSwings } from "../models/swings.js";
 import planUrl from "../генплан для Codex.svg?url";
 
 const host = document.querySelector("#scene");
@@ -127,7 +138,7 @@ for (let index = 0; index < 14; index += 1) {
 
   const shadow = new THREE.Mesh(
     new THREE.PlaneGeometry(28 + (index % 3) * 12, 14 + (index % 2) * 6),
-    new THREE.MeshBasicMaterial({ color: 0x66796f, map: cloudShadowTexture, transparent: true, depthWrite: false, depthTest: false, opacity: 0.34 }),
+    new THREE.MeshBasicMaterial({ color: 0x405a48, map: cloudShadowTexture, transparent: true, depthWrite: false, depthTest: false, opacity: 0.52 }),
   );
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.set(cloud.position.x + 18, 1.08, cloud.position.z + 10);
@@ -148,6 +159,7 @@ scene.add(map);
 const plotMeshes = [];
 const interactiveMeshes = [];
 const publicMeshes = [];
+const movingCars = [];
 const publicLabels = ["Спортивная площадка", "Магазин", "Детская площадка", "Фруктовый сад", null, null];
 const firstQueueNumbers = new Map([
   [57, 30], [49, 29], [48, 28], [50, 27], [51, 26], [52, 25], [53, 24], [71, 23],
@@ -190,6 +202,18 @@ const WORLD_W = 160;
 const SCALE = WORLD_W / SVG_W;
 const SVG_OFFSET_X = 4961;
 const SVG_OFFSET_Y = 9221;
+const playgroundMarks = [
+  [9313, 11452], [9355, 11283], [9424, 11374], [9583, 11330], [9508, 11436],
+].map(([x, y]) => new THREE.Vector2(x, y));
+const orchardMarks = [
+  [9676.5, 11454.5], [9735.5, 11409.5], [9793.5, 11366.5], [9769.5, 11445.5],
+  [9824.5, 11403.5], [9883.5, 11357.5], [9943.5, 11312.5], [10000.5, 11268.5],
+  [9851.5, 11321.5], [9855.5, 11438.5], [9913.5, 11396.5], [9913.5, 11275.5],
+  [9969.5, 11354.5], [9943.5, 11431.5], [9969.5, 11232.5], [10000.5, 11388.5],
+  [10093.5, 11377.5], [10031.5, 11304.5], [10063.5, 11341.5], [10033.5, 11423.5],
+  [10122.5, 11414.5], [10061.5, 11224.5], [10091.5, 11259.5], [10120.5, 11297.5],
+  [10027.5, 11187.5], [10151.5, 11333.5], [10182.5, 11369.5], [10209.5, 11406.5],
+].map(([x, y]) => new THREE.Vector2(x, y));
 const settlementTarget = new THREE.Vector3(7, -6, 7);
 const HEIGHT_UNIT = 0.06;
 
@@ -201,7 +225,7 @@ const layers = {
   "#9AA0A3": { name: "Дороги поселка", elevation: HEIGHT_UNIT * 2, height: HEIGHT_UNIT, color: 0x9aa0a3 },
   "#59A37E": { name: "Лес", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT, color: 0x59a37e },
   "#EAE3CA": { name: "Общественные места", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xeae3ca },
-  "#80ABDD": { name: "Электрическая подстанция", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0x80abdd, isSubstation: true },
+  "#A4C1E3": { name: "Электрическая подстанция", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xa4c1e3, isSubstation: true },
   "#CD80DD": { name: "Участки домов", elevation: HEIGHT_UNIT * 2.5, height: HEIGHT_UNIT, color: 0xcee593, isPlot: true },
 };
 const forestPolygons = [];
@@ -343,7 +367,7 @@ function addTerritory(path, definition) {
     } else if (definition.color === 0xeae3ca) {
       const points = shape.extractPoints(8).shape;
       const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
-      publicMeshes.push({ mesh, point: worldPoint(center), name: publicLabels[publicMeshes.length] ?? null });
+      publicMeshes.push({ mesh, point: worldPoint(center), shape, name: publicLabels[publicMeshes.length] ?? null });
     }
     if (definition.color === 0xeae3ca || definition.isSubstation) {
       mesh.userData.hoverHighlight = addPlotOutline(shape, definition.elevation + definition.height);
@@ -377,6 +401,123 @@ function addSubstation(shape, baseY) {
   body.receiveShadow = true;
   group.add(body);
   map.add(group);
+}
+
+function seedCars() {
+  const roadY = layers["#98B4BA"].elevation + layers["#98B4BA"].height + 0.04;
+  const roadPoint = (x, z) => {
+    const point = worldPoint(new THREE.Vector2(x, z));
+    return new THREE.Vector3(point.x, roadY, point.y);
+  };
+  const route = new THREE.CatmullRomCurve3([
+    roadPoint(14.5, 12819),
+    roadPoint(10732, 11865),
+    roadPoint(10987, 11843),
+    roadPoint(11680.5, 11820.5),
+    roadPoint(12342.5, 11887.5),
+    roadPoint(14370.5, 12212.5),
+    roadPoint(15826, 12157.5),
+    roadPoint(16275, 12191),
+    roadPoint(16690.5, 12447),
+    roadPoint(18709, 14820),
+  ], false, "centripetal");
+  [createCar1(), createCar2()].forEach((car, index) => {
+    car.scale.setScalar(0.48);
+    car.userData.route = route;
+    car.userData.progress = index / 3;
+    car.userData.speed = (0.16 + index * 0.03) / 6;
+    map.add(car);
+    movingCars.push(car);
+  });
+}
+
+function seedFruitTrees() {
+  const garden = publicMeshes.find(({ name }) => name === "Фруктовый сад");
+  if (!garden) return;
+  const polygon = garden.shape.extractPoints(8).shape;
+  const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+  const factories = [createFruitTree1, createFruitTree2, createFruitTree3];
+  const baseY = layers["#EAE3CA"].elevation + layers["#EAE3CA"].height + 0.02;
+  orchardMarks.forEach((sourcePoint, planted) => {
+    if (!isInsidePolygon(sourcePoint, polygon)) return;
+    const point = worldPoint(sourcePoint);
+    const tree = factories[planted % factories.length]();
+    tree.scale.setScalar(0.46 + (planted % 3) * 0.04);
+    tree.position.set(point.x, baseY, point.y);
+    tree.rotation.y = (planted * 1.7) % (Math.PI * 2);
+    map.add(tree);
+  });
+}
+
+function seedPlaygroundEquipment() {
+  const playground = publicMeshes.find(({ name }) => name === "Детская площадка");
+  if (!playground) return;
+  const polygon = playground.shape.extractPoints(8).shape;
+  const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+  const factories = [createSlide, createCarousel, createSandbox, createClimbingFrame, createSwings];
+  const markedPoints = playgroundMarks.filter((point) => isInsidePolygon(point, polygon));
+  if (markedPoints.length === factories.length) {
+    const baseY = layers["#EAE3CA"].elevation + layers["#EAE3CA"].height + 0.02;
+    factories.forEach((factory, index) => {
+      const world = worldPoint(markedPoints[index]);
+      const equipment = factory();
+      equipment.scale.setScalar(0.38);
+      equipment.position.set(world.x, baseY, world.y);
+      equipment.rotation.y = index * 0.35;
+      map.add(equipment);
+    });
+    return;
+  }
+  const center = bounds.getCenter(new THREE.Vector2());
+  // Keep a model-sized safety margin from the playground boundary.
+  const modelMargin = 0.35;
+  const svgMargin = modelMargin / SCALE;
+  const insetX = Math.max((bounds.max.x - bounds.min.x) * 0.1, modelMargin);
+  const insetY = Math.max((bounds.max.y - bounds.min.y) * 0.1, modelMargin);
+  const distanceToEdge = (point, start, end) => {
+    const edge = end.clone().sub(start);
+    const t = THREE.MathUtils.clamp(point.clone().sub(start).dot(edge) / edge.lengthSq(), 0, 1);
+    return point.distanceTo(start.clone().add(edge.multiplyScalar(t)));
+  };
+  const candidates = [];
+  for (let x = 0; x <= 60; x += 1) {
+    for (let y = 0; y <= 60; y += 1) {
+      const point = new THREE.Vector2(
+        bounds.min.x + insetX + x / 60 * ((bounds.max.x - bounds.min.x) - insetX * 2),
+        bounds.min.y + insetY + y / 60 * ((bounds.max.y - bounds.min.y) - insetY * 2),
+      );
+      const edgeDistance = Math.min(...polygon.map((start, index) => (
+        distanceToEdge(point, start, polygon[(index + 1) % polygon.length])
+      )));
+      if (isInsidePolygon(point, polygon) && edgeDistance >= svgMargin) candidates.push(point);
+    }
+  }
+  if (!candidates.length) {
+    const fallback = center.clone();
+    if (isInsidePolygon(fallback, polygon)) candidates.push(fallback);
+  }
+  const chosen = [];
+  while (chosen.length < factories.length && candidates.length) {
+    let bestIndex = 0;
+    let bestDistance = -Infinity;
+    candidates.forEach((candidate, index) => {
+      const distance = chosen.length === 0
+        ? candidate.distanceTo(center)
+        : Math.min(...chosen.map((point) => candidate.distanceTo(point)));
+      if (distance > bestDistance) { bestDistance = distance; bestIndex = index; }
+    });
+    chosen.push(candidates.splice(bestIndex, 1)[0]);
+  }
+  if (chosen.length < factories.length) return;
+  const baseY = layers["#EAE3CA"].elevation + layers["#EAE3CA"].height + 0.02;
+  factories.forEach((factory, index) => {
+    const world = worldPoint(chosen[index]);
+    const equipment = factory();
+    equipment.scale.setScalar(0.38);
+    equipment.position.set(world.x, baseY, world.y);
+    equipment.rotation.y = index * 0.35;
+    map.add(equipment);
+  });
 }
 
 function addHouse(spec) {
@@ -615,6 +756,9 @@ async function buildModel() {
   });
   readHouses(svgText).forEach(addHouse);
   seedPines();
+  seedCars();
+  seedFruitTrees();
+  seedPlaygroundEquipment();
   controls.target.copy(settlementTarget);
   controls.update();
 }
@@ -668,6 +812,14 @@ window.addEventListener("resize", () => {
 
 function animate() {
   controls.update();
+  movingCars.forEach((car) => {
+    const route = car.userData.route;
+    car.userData.progress = (car.userData.progress + car.userData.speed * 0.016) % 1;
+    const position = route.getPointAt(car.userData.progress);
+    const tangent = route.getTangentAt(car.userData.progress);
+    car.position.copy(position);
+    car.rotation.y = Math.atan2(tangent.x, tangent.z);
+  });
   publicMeshes.forEach(({ mesh, point, name }) => {
     if (!name) return;
     const projected = new THREE.Vector3(point.x, mesh.position.y + 0.45, point.y).project(camera);
