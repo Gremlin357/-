@@ -146,8 +146,9 @@ scene.add(sunSprite);
 const map = new THREE.Group();
 scene.add(map);
 const plotMeshes = [];
+const interactiveMeshes = [];
 const publicMeshes = [];
-const publicLabels = [null, "Магазин", "Детская площадка", "Фруктовый сад", null, "Спортивная площадка"];
+const publicLabels = ["Спортивная площадка", "Магазин", "Детская площадка", "Фруктовый сад", null, null];
 const firstQueueNumbers = new Map([
   [57, 30], [49, 29], [48, 28], [50, 27], [51, 26], [52, 25], [53, 24], [71, 23],
   [31, 21], [38, 20], [39, 19], [40, 18], [41, 17], [85, 16], [82, 58], [83, 59], [76, 60],
@@ -200,6 +201,7 @@ const layers = {
   "#9AA0A3": { name: "Дороги поселка", elevation: HEIGHT_UNIT * 2, height: HEIGHT_UNIT, color: 0x9aa0a3 },
   "#59A37E": { name: "Лес", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT, color: 0x59a37e },
   "#EAE3CA": { name: "Общественные места", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xeae3ca },
+  "#80ABDD": { name: "Электрическая подстанция", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0x80abdd, isSubstation: true },
   "#CD80DD": { name: "Участки домов", elevation: HEIGHT_UNIT * 2.5, height: HEIGHT_UNIT, color: 0xcee593, isPlot: true },
 };
 const forestPolygons = [];
@@ -337,15 +339,44 @@ function addTerritory(path, definition) {
       mesh.userData.plotCenter = center;
       mesh.userData.plotNumber = firstQueueNumbers.get(plotMeshes.length) ?? null;
       plotMeshes.push(mesh);
+      interactiveMeshes.push(mesh);
     } else if (definition.color === 0xeae3ca) {
       const points = shape.extractPoints(8).shape;
       const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
       publicMeshes.push({ mesh, point: worldPoint(center), name: publicLabels[publicMeshes.length] ?? null });
     }
+    if (definition.color === 0xeae3ca || definition.isSubstation) {
+      mesh.userData.hoverHighlight = addPlotOutline(shape, definition.elevation + definition.height);
+      interactiveMeshes.push(mesh);
+    }
+    if (definition.isSubstation) addSubstation(shape, definition.elevation + definition.height);
   });
     if (definition.color === 0x59a37e) {
     shapes.forEach((shape) => forestPolygons.push(shape.extractPoints(8).shape));
   }
+}
+
+function addSubstation(shape, baseY) {
+  const points = shape.extractPoints(8).shape;
+  const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+  const center = worldPoint(bounds.getCenter(new THREE.Vector2()));
+  const edge = points[1].clone().sub(points[0]);
+  const nextEdge = points[2].clone().sub(points[1]);
+  const width = 0.3;
+  const depth = 0.3;
+  const rotation = -Math.atan2(edge.y, edge.x);
+  const group = new THREE.Group();
+  group.position.set(center.x, baseY, center.y);
+  group.rotation.y = rotation;
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(width, 0.5, depth),
+    new THREE.MeshStandardMaterial({ color: 0xf8f8f2, roughness: 0.78 }),
+  );
+  body.position.y = 0.25;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  group.add(body);
+  map.add(group);
 }
 
 function addHouse(spec) {
@@ -600,7 +631,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
   pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
   pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const hit = raycaster.intersectObjects(plotMeshes, false)[0]?.object || null;
+  const hit = raycaster.intersectObjects(interactiveMeshes, false)[0]?.object || null;
   if (hoveredPlot === hit) {
     if (hit?.userData.plotNumber) {
       plotLabel.style.left = `${event.clientX + 14}px`;
@@ -608,10 +639,10 @@ renderer.domElement.addEventListener("pointermove", (event) => {
     }
     return;
   }
-  if (hoveredPlot) hoveredPlot.userData.plotHighlight.visible = false;
+  if (hoveredPlot) (hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight).visible = false;
   hoveredPlot = hit;
   if (hoveredPlot) {
-    hoveredPlot.userData.plotHighlight.visible = true;
+    (hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight).visible = true;
     if (hoveredPlot.userData.plotNumber) {
       plotLabel.textContent = hoveredPlot.userData.plotNumber;
       plotLabel.style.left = `${event.clientX + 14}px`;
@@ -624,7 +655,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
 });
 
 renderer.domElement.addEventListener("pointerleave", () => {
-  if (hoveredPlot) hoveredPlot.userData.plotHighlight.visible = false;
+  if (hoveredPlot) (hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight).visible = false;
   hoveredPlot = null;
   plotLabel.classList.remove("visible");
 });
