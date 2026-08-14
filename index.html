@@ -8,54 +8,14 @@
   </head>
   <body>
     <main class="app">
-      <aside class="panel">
-        <div class="brand">
-          <span>шелес</span>
-          <small>виртуальная модель поселка</small>
-        </div>
-
-        <section class="controls" aria-label="Режим модели">
-          <button class="queue-button active" data-map="model">3D генплан</button>
-          <button class="queue-button" data-map="houses">Домики</button>
-          <button class="queue-button" data-map="forest">Деревья</button>
-        </section>
-
-        <section class="filters" aria-label="Фильтры">
-          <label>
-            Статус
-            <select id="status-filter">
-              <option value="all">Все участки</option>
-              <option value="available">Свободные</option>
-              <option value="reserved">Забронированные</option>
-              <option value="sold">Проданные</option>
-              <option value="building">Строятся</option>
-            </select>
-          </label>
-        </section>
-
-        <section class="legend" aria-label="Легенда">
-          <div><i class="available"></i>Свободен</div>
-          <div><i class="reserved"></i>Бронь</div>
-          <div><i class="sold"></i>Продан</div>
-          <div><i class="building"></i>Строится</div>
-        </section>
-
-        <section class="card" id="plot-card">
-          <span class="eyebrow">Выберите дом</span>
-          <h1>3D генплан</h1>
-          <p>Кликните по объемному дому, чтобы посмотреть параметры участка.</p>
-        </section>
-      </aside>
-
       <section class="viewport">
         <div id="scene"></div>
+        <img class="logo-overlay" src="./лого.svg" alt="Шелес" />
         <div class="toolbar">
           <button id="reset-camera" title="Вернуть камеру">⟲</button>
-          <button id="top-camera" title="Вид сверху">⌖</button>
         </div>
       </section>
     </main>
-
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

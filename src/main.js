@@ -32,7 +32,7 @@ controls.minDistance = 30;
 controls.maxDistance = 190;
 const updateCameraReadout = () => {
   const format = (value) => value.toFixed(2);
-  cameraReadout.textContent = `Камера: [${camera.position.toArray().map(format).join(", ")}] | Цель: [${controls.target.toArray().map(format).join(", ")}]`;
+  cameraReadout.innerHTML = `[${camera.position.toArray().map(format).join(", ")}]<br>[${controls.target.toArray().map(format).join(", ")}]`;
 };
 controls.addEventListener("change", () => {
   console.log("Camera:", camera.position.toArray(), "Target:", controls.target.toArray());
@@ -580,7 +580,6 @@ function setCamera(position) {
 }
 
 document.querySelector("#reset-camera").addEventListener("click", () => setCamera([-17, 40, -42]));
-document.querySelector("#top-camera").addEventListener("click", () => setCamera([-13, 132, -1.1]));
 document.querySelectorAll(".queue-button").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".queue-button").forEach((item) => item.classList.remove("active"));
