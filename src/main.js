@@ -60,7 +60,7 @@ sun.position.set(-45, 80, 45);
 sun.castShadow = true;
 sun.target.position.set(-13, 0, -1);
 scene.add(sun.target);
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(4096, 4096);
 sun.shadow.camera.left = -100;
 sun.shadow.camera.right = 100;
 sun.shadow.camera.top = 100;
@@ -68,6 +68,7 @@ sun.shadow.camera.bottom = -100;
 sun.shadow.camera.near = 1;
 sun.shadow.camera.far = 220;
 sun.shadow.bias = -0.00015;
+sun.shadow.normalBias = 0.025;
 scene.add(sun);
 
 const sky = new Sky();
@@ -237,6 +238,28 @@ setSunPhase(sunPhase);
 const map = new THREE.Group();
 scene.add(map);
 const houseShadows = [];
+const houseLights = [];
+const houseGlows = [];
+const plantingTrees = [];
+const plantingShadows = [];
+const forestShadowRecords = [];
+let forestShadowMesh = null;
+const forestShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.16, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
+const plantingShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.18, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
+const glowCanvas = document.createElement("canvas");
+glowCanvas.width = 128;
+glowCanvas.height = 128;
+const glowContext = glowCanvas.getContext("2d");
+const glowGradient = glowContext.createRadialGradient(64, 64, 4, 64, 64, 64);
+glowGradient.addColorStop(0, "rgba(255, 181, 107, 0.8)");
+glowGradient.addColorStop(0.35, "rgba(255, 181, 107, 0.38)");
+glowGradient.addColorStop(0.72, "rgba(255, 181, 107, 0.1)");
+glowGradient.addColorStop(1, "rgba(255, 181, 107, 0)");
+glowContext.fillStyle = glowGradient;
+glowContext.fillRect(0, 0, 128, 128);
+const glowTexture = new THREE.CanvasTexture(glowCanvas);
+glowTexture.colorSpace = THREE.SRGBColorSpace;
+const houseGlowMaterial = new THREE.MeshBasicMaterial({ map: glowTexture, transparent: true, opacity: 0, depthWrite: false, depthTest: true, toneMapped: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
 const houseShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.49, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
 const plotMeshes = [];
 const interactiveMeshes = [];
@@ -337,7 +360,7 @@ const tallFirInstances = {
   top: new THREE.InstancedMesh(new THREE.ConeGeometry(0.25, 0.78, 8), tallFirCrowns[0], 3600),
 };
 Object.values({ ...regularTreeInstances, ...tallFirInstances }).forEach((mesh) => {
-  mesh.castShadow = true;
+  mesh.castShadow = false;
   mesh.receiveShadow = true;
   forestInstances.add(mesh);
 });
@@ -422,7 +445,17 @@ function addPlotOutline(shape, elevation) {
 }
 
 function addTerritory(path, definition) {
-  if (definition.hidden) return;
+  if (definition.hidden) {
+    const receiverMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+    SVGLoader.createShapes(path).forEach((shape) => {
+      const receiver = flatTexturedShape(shape, receiverMaterial);
+      receiver.position.y = definition.elevation;
+      receiver.receiveShadow = true;
+      receiver.renderOrder = 5;
+      map.add(receiver);
+    });
+    return;
+  }
   const material = new THREE.MeshStandardMaterial({
     color: definition.color,
     roughness: 0.9,
@@ -466,6 +499,11 @@ function addTerritory(path, definition) {
 
 function addPlantingPines(paths) {
   const factories = [createPine1, createPine2, createPine3];
+  const profiles = [
+    { radius: 0.72, height: 3.05 },
+    { radius: 0.86, height: 2.875 },
+    { radius: 0.62, height: 1.975 },
+  ];
   let planted = 0;
   paths.forEach((path) => {
     SVGLoader.createShapes(path).forEach((shape) => {
@@ -473,17 +511,46 @@ function addPlantingPines(paths) {
       if (!points.length) return;
       const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
       const world = worldPoint(center);
-      const tree = factories[planted % factories.length]();
-      tree.scale.setScalar(0.22 + (planted % 3) * 0.035);
+      const variant = planted % factories.length;
+      const tree = factories[variant]();
+      const scale = 0.22 + (planted % 3) * 0.035;
+      tree.scale.setScalar(scale);
       tree.position.set(world.x, HEIGHT_UNIT + 0.1, world.y);
       tree.rotation.y = planted * 1.7;
       tree.traverse((object) => {
-        if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; }
+        if (object.isMesh) { object.castShadow = false; object.receiveShadow = true; }
       });
       map.add(tree);
+      plantingTrees.push({ tree, scale, profile: profiles[variant] });
       planted += 1;
     });
   });
+}
+
+function createPlantingShadows() {
+  // Keep planting shadows above the lower forest surface and plot/road surfaces,
+  // while remaining below house bases so they are visible without covering buildings.
+  const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.001;
+  plantingTrees.forEach(({ tree, scale, profile }) => {
+    const shadow = new THREE.Mesh(new THREE.BufferGeometry(), plantingShadowMaterial);
+    // Shadow vertices are written in world coordinates, so the mesh stays at the origin.
+    shadow.position.set(0, 0, 0);
+    shadow.renderOrder = 22;
+    map.add(shadow);
+    plantingShadows.push({ tree, shadow, scale, profile, groundY });
+  });
+}
+
+function createForestShadows() {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute([
+    -1, 0, 0, 1, 0, 0, 0, 0, 1,
+  ], 3));
+  geometry.setIndex([0, 1, 2]);
+  forestShadowMesh = new THREE.InstancedMesh(geometry, forestShadowMaterial, forestShadowRecords.length);
+  forestShadowMesh.count = forestShadowRecords.length;
+  forestShadowMesh.renderOrder = 21;
+  map.add(forestShadowMesh);
 }
 
 function addSubstation(shape, baseY) {
@@ -629,6 +696,10 @@ function seedPlaygroundEquipment() {
 function addHouse(spec) {
   const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xf8f8f2, roughness: 0.78 });
   const roofMaterial = bodyMaterial.clone();
+  bodyMaterial.emissive.set(0xffb56b);
+  roofMaterial.emissive.set(0xffb56b);
+  bodyMaterial.emissiveIntensity = 0;
+  roofMaterial.emissiveIntensity = 0;
   roofMaterial.flatShading = true;
   roofMaterial.needsUpdate = true;
   const radians = THREE.MathUtils.degToRad(spec.rotation);
@@ -666,7 +737,19 @@ function addHouse(spec) {
     roof.castShadow = true;
     roof.receiveShadow = true;
     group.add(body, roof);
+    const light = new THREE.PointLight(0xffb56b, 0, 4.5, 2);
+    light.position.set(0, 0.7, 0);
+    light.castShadow = false;
+    group.add(light);
     map.add(group);
+    houseLights.push({ light, materials: [bodyMaterial, roofMaterial] });
+    const glow = new THREE.Mesh(new THREE.CircleGeometry(1, 16), houseGlowMaterial);
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.set(center.x, layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.012, center.y);
+    glow.scale.set(1.35, 1.35, 1);
+    glow.renderOrder = 25;
+    map.add(glow);
+    houseGlows.push(glow);
     const shadow = new THREE.Mesh(new THREE.BufferGeometry(), houseShadowMaterial);
     // Vertices are already written in world X/Y/Z coordinates.
     shadow.rotation.x = 0;
@@ -713,6 +796,80 @@ function updateHouseShadows() {
     shadow.geometry.computeBoundingSphere();
     shadow.geometry.computeBoundingBox();
   });
+  plantingShadows.forEach(({ tree, shadow, scale, profile, groundY }) => {
+    const dayFactor = THREE.MathUtils.smoothstep(daylightLevel, 0, 1);
+    shadow.visible = sun.position.y > 0 && dayFactor > 0.001;
+    shadow.material.opacity = 0.18 * dayFactor;
+    if (!shadow.visible) return;
+    const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
+    const baseRadius = profile.radius * scale * 0.72;
+    const apex = new THREE.Vector3(
+      tree.position.x,
+      tree.position.y + profile.height * scale,
+      tree.position.z,
+    );
+    const apexDistance = (groundY - apex.y) / direction.y;
+    const projectedApex = new THREE.Vector3(
+      apex.x + direction.x * apexDistance,
+      groundY,
+      apex.z + direction.z * apexDistance,
+    );
+    const points = [];
+    for (let index = 0; index < 8; index += 1) {
+      const angle = (index / 8) * Math.PI * 2;
+      points.push(new THREE.Vector2(
+        tree.position.x + Math.cos(angle) * baseRadius,
+        tree.position.z + Math.sin(angle) * baseRadius,
+      ));
+    }
+    points.push(new THREE.Vector2(projectedApex.x, projectedApex.z));
+    const hull = convexHull(points);
+    const positions = new Float32Array(hull.length * 3);
+    hull.forEach((point, index) => {
+      positions[index * 3] = point.x;
+      positions[index * 3 + 1] = groundY;
+      positions[index * 3 + 2] = point.y;
+    });
+    shadow.geometry.dispose();
+    shadow.geometry = new THREE.BufferGeometry();
+    shadow.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    shadow.geometry.setIndex(hull.slice(1, -1).flatMap((_, index) => [0, index + 1, index + 2]));
+    shadow.geometry.computeBoundingSphere();
+  });
+  if (forestShadowMesh) {
+    const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.001;
+    const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
+    const daylight = THREE.MathUtils.smoothstep(daylightLevel, 0, 1);
+    forestShadowMesh.visible = direction.y > 0 && daylight > 0.001;
+    forestShadowMaterial.opacity = 0.16 * daylight;
+    if (forestShadowMesh.visible) {
+      const horizontal = Math.hypot(direction.x, direction.z);
+      const matrix = new THREE.Matrix4();
+      forestShadowRecords.forEach(({ position, scale, radius, height }, index) => {
+        const shadowLength = Math.min(45, Math.max(0.05, (height * scale - (groundY - position.y)) * horizontal / Math.max(0.08, direction.y)));
+        const awayX = -direction.x / Math.max(0.001, horizontal);
+        const awayZ = -direction.z / Math.max(0.001, horizontal);
+        const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(awayX, awayZ));
+        matrix.compose(
+          new THREE.Vector3(position.x, groundY + 0.001, position.z),
+          rotation,
+          new THREE.Vector3(radius * scale, shadowLength, 1),
+        );
+        forestShadowMesh.setMatrixAt(index, matrix);
+      });
+      forestShadowMesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+}
+
+function updateHouseLights() {
+  const night = THREE.MathUtils.smoothstep(1 - daylightLevel, 0.05, 0.72);
+  houseLights.forEach(({ light, materials }) => {
+    light.intensity = 2.6 * night;
+    materials.forEach((material) => { material.emissiveIntensity = 0.56 * night; });
+  });
+  houseGlowMaterial.opacity = 0.84 * night;
+  houseGlows.forEach((glow) => { glow.visible = night > 0.001; });
 }
 
 function readHouses(svgText) {
@@ -759,11 +916,16 @@ function seedPines() {
     };
   })();
   const pineFactories = [createPine1, createPine2, createPine3];
+  const pineProfiles = [
+    { radius: 0.72, height: 3.05 },
+    { radius: 0.86, height: 2.875 },
+    { radius: 0.62, height: 1.975 },
+  ];
   const pineCapacity = 6300;
   const templates = pineFactories.map((factory) => factory());
   const pineBatches = templates.map((template) => template.children.map((part) => {
     const mesh = new THREE.InstancedMesh(part.geometry, part.material, pineCapacity);
-    mesh.castShadow = true;
+    mesh.castShadow = false;
     mesh.receiveShadow = true;
     return mesh;
   }));
@@ -781,6 +943,7 @@ function seedPines() {
     const pine = templates[type];
     const instance = counts[type];
     const scale = 0.55 + random() * 0.65;
+    forestShadowRecords.push({ position: new THREE.Vector3(point.x, forestBaseY, point.y), scale, ...pineProfiles[type] });
     const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI * 2);
     pine.children.forEach((part, partIndex) => {
       matrix.compose(
@@ -794,11 +957,19 @@ function seedPines() {
     added += 1;
   }
   pineBatches.forEach((batches, type) => batches.forEach((batch) => {
+      batch.castShadow = false;
+    batch.receiveShadow = true;
     batch.count = counts[type];
     batch.instanceMatrix.needsUpdate = true;
     batch.computeBoundingSphere();
   }));
   map.add(pines);
+  pines.traverse((object) => {
+    if (object.isMesh) {
+      object.castShadow = false;
+      object.receiveShadow = true;
+    }
+  });
 }
 
 function pointInExpandedForest(point) {
@@ -912,6 +1083,7 @@ async function buildModel() {
   addPlantingPines(plantingPaths);
   map.updateMatrixWorld(true);
   updateHouseShadows();
+  updateHouseLights();
   seedCars();
   seedFruitTrees();
   seedPlaygroundEquipment();
@@ -971,6 +1143,7 @@ function animate() {
   if (!sunDragging) setSunPhase(sunPhase - 0.0007);
   map.updateMatrixWorld(true);
   updateHouseShadows();
+  updateHouseLights();
   movingCars.forEach((car) => {
     const route = car.userData.route;
     car.userData.progress = (car.userData.progress + car.userData.speed * 0.016) % 1;
