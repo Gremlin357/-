@@ -53,7 +53,8 @@ controls.addEventListener("change", () => {
 });
 updateCameraReadout();
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x758775, 2.5));
+const ambientLight = new THREE.HemisphereLight(0xffffff, 0x758775, 1.8);
+scene.add(ambientLight);
 const sun = new THREE.DirectionalLight(0xffffff, 2.8);
 sun.position.set(-45, 80, 45);
 sun.castShadow = true;
@@ -154,8 +155,89 @@ sunSprite.position.set(-72, 104, 72);
 sunSprite.scale.setScalar(30);
 scene.add(sunSprite);
 
+const moonLight = new THREE.HemisphereLight(0x9ebdff, 0x17243d, 0);
+scene.add(moonLight);
+function createMoonTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext("2d");
+  const gradient = context.createRadialGradient(64, 64, 12, 64, 64, 58);
+  gradient.addColorStop(0, "rgba(220, 235, 255, 1)");
+  gradient.addColorStop(0.65, "rgba(170, 205, 255, 0.75)");
+  gradient.addColorStop(1, "rgba(170, 205, 255, 0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(canvas);
+}
+const moonSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: createMoonTexture(), transparent: true, depthWrite: false, opacity: 0 }));
+moonSprite.position.set(72, 92, -72);
+moonSprite.scale.setScalar(24);
+scene.add(moonSprite);
+
+const sunDial = document.createElement("div");
+sunDial.className = "sun-dial";
+sunDial.innerHTML = "<div class=\"sun-dial__title\">Солнце</div><div class=\"sun-dial__ring\"><span class=\"sun-dial__dot\"></span><b class=\"sun-dial__east\">Восток</b><b class=\"sun-dial__zenith\">Зенит</b><b class=\"sun-dial__west\">Запад</b><b class=\"sun-dial__nadir\">Надир</b></div>";
+host.appendChild(sunDial);
+const sunDialRing = sunDial.querySelector(".sun-dial__ring");
+const sunDialDot = sunDial.querySelector(".sun-dial__dot");
+// The dial uses: left = east, top = zenith, right = west, bottom = nadir.
+let sunPhase = Math.PI;
+let sunDragging = false;
+let daylightLevel = 0;
+function setSunPhase(phase) {
+  sunPhase = (phase + Math.PI * 2) % (Math.PI * 2);
+  const horizontal = Math.cos(sunPhase);
+  const height = Math.sin(sunPhase);
+  const daylight = Math.max(0, height);
+  const eastWest = Math.sin(sunPhase);
+  // SVG is mirrored into world X/Z, so the east-west axis is world Z.
+  sun.position.set(eastWest * 75, Math.max(-45, height * 90), horizontal * 75);
+  const dawn = new THREE.Color(0xffa9c2);
+  const noon = new THREE.Color(0xffffff);
+  const dusk = new THREE.Color(0xffb36e);
+  const night = new THREE.Color(0x101a30);
+  let sunColor = night;
+  const daylightCurve = THREE.MathUtils.smoothstep(daylight, 0.015, 0.32);
+  daylightLevel = daylightCurve;
+  if (height > 0) {
+    if (sunPhase > Math.PI / 2) {
+      // East to zenith: pink sunrise fades into white daylight.
+      const t = THREE.MathUtils.smoothstep((Math.PI - sunPhase) / (Math.PI / 2), 0, 0.28);
+      sunColor = dawn.clone().lerp(noon, t);
+    } else {
+      // Zenith to west: white daylight fades into orange sunset.
+      const t = THREE.MathUtils.smoothstep(sunPhase / (Math.PI / 2), 0, 0.24);
+      sunColor = dusk.clone().lerp(noon, t);
+    }
+  }
+  sun.color.copy(sunColor);
+  sun.intensity = daylight > 0 ? 0.35 + daylightCurve * 3.45 : 0;
+  ambientLight.intensity = daylight > 0 ? 0.48 + daylightCurve * 1.62 : 0.32;
+  moonLight.intensity = (1 - daylight) * 0.22;
+  sunSprite.position.copy(sun.position).multiplyScalar(1.35);
+  sunSprite.material.opacity = daylight > 0.015 ? Math.min(1, daylight * 3) : 0;
+  moonSprite.material.opacity = daylight < 0.12 ? Math.min(0.8, (0.12 - daylight) * 7) : 0;
+  sky.material.uniforms.sunPosition.value.copy(sun.position).normalize();
+  sunDialDot.style.left = `${50 + horizontal * 42}%`;
+  sunDialDot.style.top = `${50 - height * 42}%`;
+}
+function phaseFromPointer(event) {
+  const rect = sunDialRing.getBoundingClientRect();
+  const x = event.clientX - (rect.left + rect.width / 2);
+  const y = event.clientY - (rect.top + rect.height / 2);
+  return Math.atan2(-y, x);
+}
+sunDialRing.addEventListener("pointerdown", (event) => { sunDragging = true; sunDialRing.setPointerCapture(event.pointerId); setSunPhase(phaseFromPointer(event)); });
+sunDialRing.addEventListener("pointermove", (event) => { if (sunDragging) setSunPhase(phaseFromPointer(event)); });
+sunDialRing.addEventListener("pointerup", () => { sunDragging = false; });
+sunDialRing.addEventListener("pointercancel", () => { sunDragging = false; });
+setSunPhase(sunPhase);
+
 const map = new THREE.Group();
 scene.add(map);
+const houseShadows = [];
+const houseShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.49, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
 const plotMeshes = [];
 const interactiveMeshes = [];
 const publicMeshes = [];
@@ -224,6 +306,7 @@ const layers = {
   "#D3D7DE": { name: "Обочина", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT * 0.8, color: 0xd3d7de },
   "#9AA0A3": { name: "Дороги поселка", elevation: HEIGHT_UNIT * 2, height: HEIGHT_UNIT, color: 0x9aa0a3 },
   "#59A37E": { name: "Лес", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT, color: 0x59a37e },
+  "#B4ED92": { name: "Посадка", elevation: 0, height: 0, color: 0xb4ed92, hidden: true },
   "#EAE3CA": { name: "Общественные места", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xeae3ca },
   "#A4C1E3": { name: "Электрическая подстанция", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xa4c1e3, isSubstation: true },
   "#CD80DD": { name: "Участки домов", elevation: HEIGHT_UNIT * 2.5, height: HEIGHT_UNIT, color: 0xcee593, isPlot: true },
@@ -339,6 +422,7 @@ function addPlotOutline(shape, elevation) {
 }
 
 function addTerritory(path, definition) {
+  if (definition.hidden) return;
   const material = new THREE.MeshStandardMaterial({
     color: definition.color,
     roughness: 0.9,
@@ -378,6 +462,28 @@ function addTerritory(path, definition) {
     if (definition.color === 0x59a37e) {
     shapes.forEach((shape) => forestPolygons.push(shape.extractPoints(8).shape));
   }
+}
+
+function addPlantingPines(paths) {
+  const factories = [createPine1, createPine2, createPine3];
+  let planted = 0;
+  paths.forEach((path) => {
+    SVGLoader.createShapes(path).forEach((shape) => {
+      const points = shape.extractPoints(8).shape;
+      if (!points.length) return;
+      const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
+      const world = worldPoint(center);
+      const tree = factories[planted % factories.length]();
+      tree.scale.setScalar(0.22 + (planted % 3) * 0.035);
+      tree.position.set(world.x, HEIGHT_UNIT + 0.1, world.y);
+      tree.rotation.y = planted * 1.7;
+      tree.traverse((object) => {
+        if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; }
+      });
+      map.add(tree);
+      planted += 1;
+    });
+  });
 }
 
 function addSubstation(shape, baseY) {
@@ -561,6 +667,52 @@ function addHouse(spec) {
     roof.receiveShadow = true;
     group.add(body, roof);
     map.add(group);
+    const shadow = new THREE.Mesh(new THREE.BufferGeometry(), houseShadowMaterial);
+    // Vertices are already written in world X/Y/Z coordinates.
+    shadow.rotation.x = 0;
+    shadow.renderOrder = 20;
+    map.add(shadow);
+    houseShadows.push({ group, width, depth, bodyHeight, roofHeight, shadow });
+}
+
+function convexHull(points) {
+  const sorted = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  sorted.forEach((point) => { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop(); lower.push(point); });
+  const upper = [];
+  sorted.slice().reverse().forEach((point) => { while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop(); upper.push(point); });
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
+function updateHouseShadows() {
+  const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.001;
+  const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
+  houseShadows.forEach(({ group, width, depth, bodyHeight, roofHeight, shadow }) => {
+    shadow.visible = direction.y > -0.12;
+    shadow.material.opacity = 0.39 * THREE.MathUtils.smoothstep(daylightLevel, 0, 1);
+    if (!shadow.visible) return;
+    const local = [
+      [-width / 2, 0, -depth / 2], [width / 2, 0, -depth / 2], [width / 2, 0, depth / 2], [-width / 2, 0, depth / 2],
+      [-width / 2, bodyHeight, -depth / 2], [width / 2, bodyHeight, -depth / 2], [width / 2, bodyHeight, depth / 2], [-width / 2, bodyHeight, depth / 2],
+      [0, bodyHeight + roofHeight, 0],
+    ];
+    const projected = local.map(([x, y, z]) => {
+      const point = new THREE.Vector3(x, y, z).applyMatrix4(group.matrixWorld);
+      const distance = (groundY - point.y) / direction.y;
+      return new THREE.Vector2(point.x + direction.x * distance, point.z + direction.z * distance);
+    });
+    const hull = convexHull(projected);
+    const positions = new Float32Array(hull.length * 3);
+    hull.forEach((point, index) => { positions[index * 3] = point.x; positions[index * 3 + 1] = groundY; positions[index * 3 + 2] = point.y; });
+    shadow.geometry.dispose();
+    shadow.geometry = new THREE.BufferGeometry();
+    shadow.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    shadow.geometry.setIndex(hull.slice(1, -1).flatMap((_, index) => [0, index + 1, index + 2]));
+    shadow.geometry.computeVertexNormals();
+    shadow.geometry.computeBoundingSphere();
+    shadow.geometry.computeBoundingBox();
+  });
 }
 
 function readHouses(svgText) {
@@ -750,12 +902,16 @@ async function buildModel() {
   if (!response.ok) throw new Error("SVG plan could not be loaded");
   const svgText = await response.text();
   const parsed = new SVGLoader().parse(svgText);
+  const plantingPaths = parsed.paths.filter((path) => fillOf(path) === "#9A0062");
   parsed.paths.forEach((path) => {
     const fill = fillOf(path);
     if (layers[fill]) addTerritory(path, layers[fill]);
   });
   readHouses(svgText).forEach(addHouse);
   seedPines();
+  addPlantingPines(plantingPaths);
+  map.updateMatrixWorld(true);
+  updateHouseShadows();
   seedCars();
   seedFruitTrees();
   seedPlaygroundEquipment();
@@ -812,6 +968,9 @@ window.addEventListener("resize", () => {
 
 function animate() {
   controls.update();
+  if (!sunDragging) setSunPhase(sunPhase - 0.0007);
+  map.updateMatrixWorld(true);
+  updateHouseShadows();
   movingCars.forEach((car) => {
     const route = car.userData.route;
     car.userData.progress = (car.userData.progress + car.userData.speed * 0.016) % 1;

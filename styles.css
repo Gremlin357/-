@@ -212,6 +212,51 @@ select {
   pointer-events: none;
 }
 
+.sun-dial {
+  position: absolute;
+  right: 22px;
+  bottom: 20px;
+  z-index: 5;
+  width: 150px;
+  color: #f8fbff;
+  font: 11px/1.1 Inter, "Segoe UI", sans-serif;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .8);
+  user-select: none;
+}
+
+.sun-dial__title {
+  margin-bottom: 6px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.sun-dial__ring {
+  position: relative;
+  width: 122px;
+  height: 122px;
+  margin: 0 auto;
+  border: 2px solid rgba(255, 238, 166, .9);
+  border-radius: 50%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.sun-dial__ring:active { cursor: grabbing; }
+.sun-dial__dot {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: #fff1a8;
+  box-shadow: 0 0 12px 4px rgba(255, 226, 112, .72);
+}
+.sun-dial__east, .sun-dial__west, .sun-dial__zenith, .sun-dial__nadir { position: absolute; white-space: nowrap; }
+.sun-dial__east { left: -48px; top: 53px; }
+.sun-dial__west { right: -42px; top: 53px; }
+.sun-dial__zenith { left: 42px; top: -17px; }
+.sun-dial__nadir { left: 40px; bottom: -17px; }
+
 .plot-label {
   position: fixed;
   z-index: 20;
