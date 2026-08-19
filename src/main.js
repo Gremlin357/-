@@ -240,6 +240,8 @@ scene.add(map);
 const houseShadows = [];
 const houseLights = [];
 const houseGlows = [];
+let lastDaylightLevel = daylightLevel;
+let nightScheduleActive = false;
 const plantingTrees = [];
 const plantingShadows = [];
 const forestShadowRecords = [];
@@ -862,14 +864,34 @@ function updateHouseShadows() {
   }
 }
 
+function startNightSchedules() {
+  nightScheduleActive = true;
+  houseLights.forEach((house) => {
+    house.turnOnAfter = 10 + Math.random() * 20;
+    house.turnOffAfter = house.turnOnAfter + 60 + Math.random() * 240;
+  });
+}
+
 function updateHouseLights() {
   const night = THREE.MathUtils.smoothstep(1 - daylightLevel, 0.05, 0.72);
-  houseLights.forEach(({ light, materials }) => {
-    light.intensity = 2.6 * night;
-    materials.forEach((material) => { material.emissiveIntensity = 0.56 * night; });
+  if (!nightScheduleActive && daylightLevel <= 0.08) startNightSchedules();
+  if (lastDaylightLevel <= 0.08 && daylightLevel > 0.08) nightScheduleActive = false;
+  const nightMinutes = nightScheduleActive
+    ? THREE.MathUtils.clamp(((Math.PI * 2 - sunPhase) / Math.PI) * 720, 0, 720)
+    : 0;
+  houseLights.forEach((house) => {
+    const scheduledOn = nightScheduleActive && nightMinutes >= house.turnOnAfter && nightMinutes < house.turnOffAfter;
+    const intensity = scheduledOn ? night : 0;
+    house.light.intensity = 2.6 * intensity;
+    house.materials.forEach((material) => { material.emissiveIntensity = 0.56 * intensity; });
   });
   houseGlowMaterial.opacity = 0.84 * night;
-  houseGlows.forEach((glow) => { glow.visible = night > 0.001; });
+  houseGlows.forEach((glow, index) => {
+    const house = houseLights[index];
+    const scheduledOn = nightScheduleActive && house && nightMinutes >= house.turnOnAfter && nightMinutes < house.turnOffAfter;
+    glow.visible = scheduledOn && night > 0.001;
+  });
+  lastDaylightLevel = daylightLevel;
 }
 
 function readHouses(svgText) {
