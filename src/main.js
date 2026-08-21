@@ -194,7 +194,7 @@ function setSunPhase(phase) {
   const eastWest = Math.sin(sunPhase);
   // SVG is mirrored into world X/Z, so the east-west axis is world Z.
   sun.position.set(eastWest * 75, Math.max(-45, height * 90), horizontal * 75);
-  const dawn = new THREE.Color(0xffa9c2);
+  const dawn = new THREE.Color(0xff5f91);
   const noon = new THREE.Color(0xffffff);
   const dusk = new THREE.Color(0xffb36e);
   const night = new THREE.Color(0x101a30);
@@ -240,6 +240,9 @@ scene.add(map);
 const houseShadows = [];
 const houseLights = [];
 const houseGlows = [];
+const poleLights = [];
+const poleGlows = [];
+const lightPoleLabels = [];
 let lastDaylightLevel = daylightLevel;
 let nightScheduleActive = false;
 const plantingTrees = [];
@@ -261,8 +264,23 @@ glowContext.fillStyle = glowGradient;
 glowContext.fillRect(0, 0, 128, 128);
 const glowTexture = new THREE.CanvasTexture(glowCanvas);
 glowTexture.colorSpace = THREE.SRGBColorSpace;
-const houseGlowMaterial = new THREE.MeshBasicMaterial({ map: glowTexture, transparent: true, opacity: 0, depthWrite: false, depthTest: true, toneMapped: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
-const houseShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.49, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
+const houseGlowMaterial = new THREE.MeshBasicMaterial({ map: glowTexture, transparent: true, opacity: 0, depthWrite: false, depthTest: true, toneMapped: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+const headlightCanvas = document.createElement("canvas");
+headlightCanvas.width = 128;
+headlightCanvas.height = 128;
+const headlightContext = headlightCanvas.getContext("2d");
+const headlightGradient = headlightContext.createRadialGradient(64, 22, 2, 64, 64, 70);
+headlightGradient.addColorStop(0, "rgba(255, 247, 198, 0.86)");
+headlightGradient.addColorStop(0.32, "rgba(255, 231, 143, 0.48)");
+headlightGradient.addColorStop(0.72, "rgba(255, 214, 116, 0.12)");
+headlightGradient.addColorStop(1, "rgba(255, 214, 116, 0)");
+headlightContext.fillStyle = headlightGradient;
+headlightContext.fillRect(0, 0, 128, 128);
+const headlightTexture = new THREE.CanvasTexture(headlightCanvas);
+headlightTexture.colorSpace = THREE.SRGBColorSpace;
+const headlightMaterial = new THREE.MeshBasicMaterial({ color: 0xfff1b0, toneMapped: false, transparent: true, opacity: 0, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending });
+const headlightBeamMaterial = new THREE.MeshBasicMaterial({ map: headlightTexture, transparent: true, opacity: 0, depthWrite: false, depthTest: true, toneMapped: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+const houseShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.49, depthWrite: false, depthTest: true, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 const plotMeshes = [];
 const interactiveMeshes = [];
 const publicMeshes = [];
@@ -578,29 +596,78 @@ function addSubstation(shape, baseY) {
   map.add(group);
 }
 
-function seedCars() {
+function extractCarRoute(parsed) {
+  const routePath = parsed.paths.find((path) => {
+    const stroke = String(path.userData?.style?.stroke || "")
+      .replace(/^#/, "")
+      .toUpperCase();
+    return stroke === "FF0000" && path.subPaths?.length;
+  });
+  if (!routePath) return null;
+
+  const points = [];
+  routePath.subPaths.forEach((subPath) => {
+    subPath.getPoints(32).forEach((point) => {
+      const previous = points[points.length - 1];
+      if (!previous || previous.distanceToSquared(point) > 0.01) {
+        points.push(point.clone());
+      }
+    });
+  });
+  return points.length > 1 ? points : null;
+}
+
+function seedCars(routeSourcePoints = null) {
   const roadY = layers["#98B4BA"].elevation + layers["#98B4BA"].height + 0.04;
   const roadPoint = (x, z) => {
     const point = worldPoint(new THREE.Vector2(x, z));
     return new THREE.Vector3(point.x, roadY, point.y);
   };
-  const route = new THREE.CatmullRomCurve3([
-    roadPoint(14.5, 12819),
-    roadPoint(10732, 11865),
-    roadPoint(10987, 11843),
-    roadPoint(11680.5, 11820.5),
-    roadPoint(12342.5, 11887.5),
-    roadPoint(14370.5, 12212.5),
-    roadPoint(15826, 12157.5),
-    roadPoint(16275, 12191),
-    roadPoint(16690.5, 12447),
-    roadPoint(18709, 14820),
-  ], false, "centripetal");
+  const fallbackRoute = [
+    [14.5, 12819], [10732, 11865], [10987, 11843],
+    [11680.5, 11820.5], [12342.5, 11887.5], [14370.5, 12212.5],
+    [15826, 12157.5], [16275, 12191], [16690.5, 12447], [18709, 14820],
+  ];
+  const routePoints = routeSourcePoints?.map((point) => roadPoint(point.x, point.y))
+    || fallbackRoute.map(([x, z]) => roadPoint(x, z));
+  // Проходим исходную красную траекторию по сегментам: CurvePath сохраняет
+  // равномерную скорость и не создаёт петлю/замедление на перекрёстках.
+  const route = new THREE.CurvePath();
+  for (let index = 1; index < routePoints.length; index += 1) {
+    route.add(new THREE.LineCurve3(routePoints[index - 1], routePoints[index]));
+  }
   [createCar1(), createCar2()].forEach((car, index) => {
     car.scale.setScalar(0.48);
+    const headlights = [];
+    [-0.34, 0.34].forEach((x) => {
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), headlightMaterial);
+      lamp.position.set(x, 0.53, 1.12);
+      car.add(lamp);
+      headlights.push(lamp);
+    });
+    const beams = [];
+    [-0.34, 0.34].forEach((x) => {
+      const beamGeometry = new THREE.BufferGeometry();
+      beamGeometry.setAttribute("position", new THREE.Float32BufferAttribute([
+        -0.11, 0, 0, 0.11, 0, 0, 0.24, 0, 1.8,
+        -0.11, 0, 0, 0.24, 0, 1.8, -0.24, 0, 1.8,
+      ], 3));
+      beamGeometry.setAttribute("uv", new THREE.Float32BufferAttribute([
+        0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1,
+      ], 2));
+      const beam = new THREE.Mesh(beamGeometry, headlightBeamMaterial);
+      beam.position.set(x, 0.012, 1.85);
+      beam.scale.setScalar(3);
+      beam.renderOrder = 24;
+      car.add(beam);
+      beams.push(beam);
+    });
+    car.userData.headlights = headlights;
+    car.userData.headlightBeams = beams;
     car.userData.route = route;
-    car.userData.progress = index / 3;
-    car.userData.speed = (0.16 + index * 0.03) / 6;
+    car.userData.progress = index / 2;
+    // Скорость задаётся в долях длины маршрута, поэтому не меняется на поворотах.
+    car.userData.speed = 0.025;
     map.add(car);
     movingCars.push(car);
   });
@@ -771,7 +838,10 @@ function convexHull(points) {
 }
 
 function updateHouseShadows() {
-  const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.001;
+  // На дальнем плане малый постоянный offset теряется в depth-buffer.
+  const cameraDistance = camera.position.distanceTo(controls.target);
+  const surfaceOffset = Math.max(0.004, cameraDistance * 0.00018);
+  const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + surfaceOffset;
   const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
   houseShadows.forEach(({ group, width, depth, bodyHeight, roofHeight, shadow }) => {
     shadow.visible = direction.y > -0.12;
@@ -890,8 +960,28 @@ function updateHouseLights() {
     const house = houseLights[index];
     const scheduledOn = nightScheduleActive && house && nightMinutes >= house.turnOnAfter && nightMinutes < house.turnOffAfter;
     glow.visible = scheduledOn && night > 0.001;
+    const cameraDistance = camera.position.distanceTo(controls.target);
+    glow.position.y = layers["#CD80DD"].elevation + layers["#CD80DD"].height + Math.max(0.004, cameraDistance * 0.00018);
   });
   lastDaylightLevel = daylightLevel;
+}
+
+function updatePoleLights() {
+  const fiveMinutes = (Math.PI * 2 * 5) / 1440;
+  const thirtyMinutes = (Math.PI * 2 * 30) / 1440;
+  const night = THREE.MathUtils.smoothstep(1 - daylightLevel, 0.05, 0.72);
+  const active = sunPhase > Math.PI + thirtyMinutes && sunPhase < Math.PI * 2 - fiveMinutes;
+  const intensity = active ? night : 0;
+  poleLights.forEach(({ light, lamp }) => {
+    light.intensity = 0.85 * intensity;
+    lamp.material.emissiveIntensity = 1.4 * intensity;
+  });
+  const cameraDistance = camera.position.distanceTo(controls.target);
+  poleGlows.forEach((glow) => {
+    glow.visible = active && night > 0.001;
+    glow.material.opacity = 0.84 * intensity;
+    glow.position.y = layers["#98B4BA"].elevation + layers["#98B4BA"].height + Math.max(0.004, cameraDistance * 0.00018);
+  });
 }
 
 function readHouses(svgText) {
@@ -927,6 +1017,95 @@ function isInsidePolygon(point, polygon) {
 
 function pointInAnyForest(point) {
   return forestPolygons.some((polygon) => isInsidePolygon(point, polygon));
+}
+
+function seedLightPoles(lightPolePaths, guidePaths = []) {
+  const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x343a3d, roughness: 0.68, metalness: 0.35 });
+  const lampMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffe4a3,
+    emissive: 0xffb45e,
+    emissiveIntensity: 0.8,
+    roughness: 0.35,
+  });
+  const poleBaseY = layers["#98B4BA"].elevation + layers["#98B4BA"].height + 0.02;
+  const guides = guidePaths.map((path) => {
+    const subPaths = path.subPaths
+      .map((subPath) => subPath.getPoints(3))
+      .filter((points) => points.length >= 2);
+    if (!subPaths.length) return null;
+
+    // Current SVG guides are simple lines: start near the pole, end points
+    // toward the luminaire orientation.
+    if (subPaths.length === 1) {
+      const points = subPaths[0];
+      const start = points[0];
+      const end = points[points.length - 1];
+      return {
+        center: start.clone().lerp(end, 0.5),
+        direction: end.clone().sub(start).normalize(),
+      };
+    }
+
+    const average = (points) => points.reduce(
+      (sum, point) => sum.add(point),
+      new THREE.Vector2(),
+    ).multiplyScalar(1 / points.length);
+    const headCenter = average(subPaths[0]);
+    const shaftCenter = average(subPaths[1]);
+    const direction = headCenter.clone().sub(shaftCenter).normalize();
+    return {
+      center: headCenter.clone().lerp(shaftCenter, 0.5),
+      direction,
+    };
+  }).filter(Boolean);
+  let poleNumber = 0;
+  lightPolePaths.forEach((path) => {
+    SVGLoader.createShapes(path).forEach((shape) => {
+      const points = shape.extractPoints(4).shape;
+      if (points.length < 3) return;
+      const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+      const sourceCenter = bounds.getCenter(new THREE.Vector2());
+      const center = worldPoint(sourceCenter);
+      const pole = new THREE.Group();
+      pole.position.set(center.x, poleBaseY, center.y);
+      poleNumber += 1;
+      const label = document.createElement("div");
+      label.className = "pole-label";
+      label.textContent = String(poleNumber);
+      host.appendChild(label);
+      lightPoleLabels.push({ label, pole });
+      const nearestGuide = guides.reduce((best, guide) => {
+        if (!best) return guide;
+        return guide.center.distanceToSquared(sourceCenter) < best.center.distanceToSquared(sourceCenter) ? guide : best;
+      }, null);
+      if (nearestGuide) {
+        // The red base only locates the pole; its SVG rotation is ignored.
+        // Orientation comes exclusively from the green guide line.
+        pole.rotation.y = Math.atan2(nearestGuide.direction.y, nearestGuide.direction.x);
+      }
+      if ([3, 4, 5, 6].includes(poleNumber)) pole.rotation.y += Math.PI * 2 + Math.PI / 2;
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 1.35, 8), poleMaterial);
+      shaft.position.y = 0.675;
+      shaft.castShadow = false;
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), poleMaterial);
+      arm.position.set(0.09, 1.35, 0);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), lampMaterial);
+      lamp.position.set(0.19, 1.31, 0);
+      pole.add(shaft, arm, lamp);
+      map.add(pole);
+      const light = new THREE.PointLight(0xffc36e, 0, 3.8, 2);
+      light.position.set(0.19, 1.28, 0);
+      pole.add(light);
+      poleLights.push({ light, lamp });
+      const glow = new THREE.Mesh(new THREE.CircleGeometry(1, 16), houseGlowMaterial);
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.set(center.x, poleBaseY + 0.018, center.y);
+      glow.scale.set(1.9, 1.9, 1);
+      glow.renderOrder = 25;
+      map.add(glow);
+      poleGlows.push(glow);
+    });
+  });
 }
 
 function seedPines() {
@@ -1095,7 +1274,15 @@ async function buildModel() {
   if (!response.ok) throw new Error("SVG plan could not be loaded");
   const svgText = await response.text();
   const parsed = new SVGLoader().parse(svgText);
+  const carRoute = extractCarRoute(parsed);
   const plantingPaths = parsed.paths.filter((path) => fillOf(path) === "#9A0062");
+  const lightPolePaths = parsed.paths.filter((path) => fillOf(path) === "#A93030");
+  const guidePaths = parsed.paths.filter((path) => {
+    const style = path.userData?.style || {};
+    const stroke = String(style.stroke || "").replace(/^#/, "").toUpperCase();
+    const fill = String(style.fill || "").replace(/^#/, "").toUpperCase();
+    return stroke === "04FE9A" || fill === "04FE9A";
+  });
   parsed.paths.forEach((path) => {
     const fill = fillOf(path);
     if (layers[fill]) addTerritory(path, layers[fill]);
@@ -1103,10 +1290,12 @@ async function buildModel() {
   readHouses(svgText).forEach(addHouse);
   seedPines();
   addPlantingPines(plantingPaths);
+  seedLightPoles(lightPolePaths, guidePaths);
   map.updateMatrixWorld(true);
   updateHouseShadows();
   updateHouseLights();
-  seedCars();
+  updatePoleLights();
+  seedCars(carRoute);
   seedFruitTrees();
   seedPlaygroundEquipment();
   controls.target.copy(settlementTarget);
@@ -1166,6 +1355,7 @@ function animate() {
   map.updateMatrixWorld(true);
   updateHouseShadows();
   updateHouseLights();
+  updatePoleLights();
   movingCars.forEach((car) => {
     const route = car.userData.route;
     car.userData.progress = (car.userData.progress + car.userData.speed * 0.016) % 1;
@@ -1173,6 +1363,9 @@ function animate() {
     const tangent = route.getTangentAt(car.userData.progress);
     car.position.copy(position);
     car.rotation.y = Math.atan2(tangent.x, tangent.z);
+    const night = THREE.MathUtils.smoothstep(1 - daylightLevel, 0.08, 0.72);
+    car.userData.headlights?.forEach((lamp) => { lamp.material.opacity = 0.95 * night; });
+    car.userData.headlightBeams?.forEach((beam) => { beam.material.opacity = 0.72 * night; });
   });
   publicMeshes.forEach(({ mesh, point, name }) => {
     if (!name) return;
@@ -1186,6 +1379,15 @@ function animate() {
       mesh.userData.publicLabel = label;
     }
     const label = mesh.userData.publicLabel;
+    label.style.display = visible ? "block" : "none";
+    if (visible) {
+      label.style.left = `${(projected.x * 0.5 + 0.5) * host.clientWidth}px`;
+      label.style.top = `${(-projected.y * 0.5 + 0.5) * host.clientHeight}px`;
+    }
+  });
+  lightPoleLabels.forEach(({ label, pole }) => {
+    const projected = new THREE.Vector3(pole.position.x, pole.position.y + 1.9, pole.position.z).project(camera);
+    const visible = projected.z > -1 && projected.z < 1;
     label.style.display = visible ? "block" : "none";
     if (visible) {
       label.style.left = `${(projected.x * 0.5 + 0.5) * host.clientWidth}px`;
