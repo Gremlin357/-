@@ -290,19 +290,6 @@ select {
   pointer-events: none;
 }
 
-.pole-label {
-  position: absolute;
-  z-index: 7;
-  min-width: 20px;
-  padding: 3px 5px;
-  border-radius: 4px;
-  background: #a93030;
-  color: #ffffff;
-  font: 700 12px/1 Inter, "Segoe UI", sans-serif;
-  text-align: center;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
 
 .toolbar {
   position: absolute;

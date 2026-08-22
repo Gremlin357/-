@@ -242,7 +242,6 @@ const houseLights = [];
 const houseGlows = [];
 const poleLights = [];
 const poleGlows = [];
-const lightPoleLabels = [];
 let lastDaylightLevel = daylightLevel;
 let nightScheduleActive = false;
 const plantingTrees = [];
@@ -1040,9 +1039,12 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
       const points = subPaths[0];
       const start = points[0];
       const end = points[points.length - 1];
+      const worldStart = worldPoint(start);
+      const worldEnd = worldPoint(end);
       return {
+        anchor: start,
         center: start.clone().lerp(end, 0.5),
-        direction: end.clone().sub(start).normalize(),
+        direction: worldEnd.sub(worldStart).normalize(),
       };
     }
 
@@ -1052,8 +1054,11 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
     ).multiplyScalar(1 / points.length);
     const headCenter = average(subPaths[0]);
     const shaftCenter = average(subPaths[1]);
-    const direction = headCenter.clone().sub(shaftCenter).normalize();
+    const worldHead = worldPoint(headCenter);
+    const worldShaft = worldPoint(shaftCenter);
+    const direction = worldHead.sub(worldShaft).normalize();
     return {
+      anchor: shaftCenter,
       center: headCenter.clone().lerp(shaftCenter, 0.5),
       direction,
     };
@@ -1069,21 +1074,16 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
       const pole = new THREE.Group();
       pole.position.set(center.x, poleBaseY, center.y);
       poleNumber += 1;
-      const label = document.createElement("div");
-      label.className = "pole-label";
-      label.textContent = String(poleNumber);
-      host.appendChild(label);
-      lightPoleLabels.push({ label, pole });
       const nearestGuide = guides.reduce((best, guide) => {
         if (!best) return guide;
-        return guide.center.distanceToSquared(sourceCenter) < best.center.distanceToSquared(sourceCenter) ? guide : best;
+        return guide.anchor.distanceToSquared(sourceCenter) < best.anchor.distanceToSquared(sourceCenter) ? guide : best;
       }, null);
       if (nearestGuide) {
         // The red base only locates the pole; its SVG rotation is ignored.
         // Orientation comes exclusively from the green guide line.
-        pole.rotation.y = Math.atan2(nearestGuide.direction.y, nearestGuide.direction.x);
+        pole.rotation.y = Math.atan2(-nearestGuide.direction.y, nearestGuide.direction.x);
       }
-      if ([3, 4, 5, 6].includes(poleNumber)) pole.rotation.y += Math.PI * 2 + Math.PI / 2;
+      if (poleNumber === 3) pole.rotation.y += Math.PI;
       const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 1.35, 8), poleMaterial);
       shaft.position.y = 0.675;
       shaft.castShadow = false;
@@ -1379,15 +1379,6 @@ function animate() {
       mesh.userData.publicLabel = label;
     }
     const label = mesh.userData.publicLabel;
-    label.style.display = visible ? "block" : "none";
-    if (visible) {
-      label.style.left = `${(projected.x * 0.5 + 0.5) * host.clientWidth}px`;
-      label.style.top = `${(-projected.y * 0.5 + 0.5) * host.clientHeight}px`;
-    }
-  });
-  lightPoleLabels.forEach(({ label, pole }) => {
-    const projected = new THREE.Vector3(pole.position.x, pole.position.y + 1.9, pole.position.z).project(camera);
-    const visible = projected.z > -1 && projected.z < 1;
     label.style.display = visible ? "block" : "none";
     if (visible) {
       label.style.left = `${(projected.x * 0.5 + 0.5) * host.clientWidth}px`;
