@@ -212,6 +212,20 @@ select {
   pointer-events: none;
 }
 
+.logo-controls { position: absolute; top: 116px; left: 24px; z-index: 5; display: flex; flex-direction: column; gap: 6px; }
+.logo-controls .queue-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 6px;
+  background: rgba(28, 47, 34, 0.72);
+  color: #ffffff;
+  cursor: pointer;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+.logo-controls .queue-button.active,
+.logo-controls .queue-button:hover { border-color: #ffffff; background: rgba(79, 141, 91, 0.9); }
+
 .sun-dial {
   position: absolute;
   right: 22px;
@@ -289,6 +303,9 @@ select {
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
+.plot-tooltip-row { display: flex; justify-content: space-between; gap: 18px; line-height: 1.45; }
+.plot-tooltip-row span { color: #a9b8b1; }
+.plot-tooltip-row strong { color: #fff; font-weight: 600; }
 
 
 .toolbar {

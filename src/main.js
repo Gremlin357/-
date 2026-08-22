@@ -19,6 +19,7 @@ import { createSwings } from "../models/swings.js";
 import planUrl from "../генплан для Codex.svg?url";
 
 const host = document.querySelector("#scene");
+import { firstQueuePlots } from "./firstQueuePlots.js";
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(host.clientWidth, host.clientHeight);
@@ -282,13 +283,25 @@ const headlightBeamMaterial = new THREE.MeshBasicMaterial({ map: headlightTextur
 const houseShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.49, depthWrite: false, depthTest: true, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
 const plotMeshes = [];
 const interactiveMeshes = [];
+const firstQueueOutline = new THREE.Group();
+firstQueueOutline.visible = false;
+map.add(firstQueueOutline);
+const secondQueueOutline = new THREE.Group();
+secondQueueOutline.visible = false;
+map.add(secondQueueOutline);
+const thirdQueueOutline = new THREE.Group();
+thirdQueueOutline.visible = false;
+map.add(thirdQueueOutline);
+const villageFence = new THREE.Group();
+map.add(villageFence);
 const publicMeshes = [];
 const movingCars = [];
-const publicLabels = ["Спортивная площадка", "Магазин", "Детская площадка", "Фруктовый сад", null, null];
+const publicLabels = ["Спортивная площадка", "Магазин", "Фруктовый сад", "Детская площадка", null, null];
 const firstQueueNumbers = new Map([
   [57, 30], [49, 29], [48, 28], [50, 27], [51, 26], [52, 25], [53, 24], [71, 23],
   [31, 21], [38, 20], [39, 19], [40, 18], [41, 17], [85, 16], [82, 58], [83, 59], [76, 60],
 ]);
+const firstQueuePlotData = new Map(firstQueuePlots.map((plot) => [plot.number, plot]));
 let hoveredPlot = null;
 const pointer = new THREE.Vector2();
 const raycaster = new THREE.Raycaster();
@@ -498,6 +511,7 @@ function addTerritory(path, definition) {
       const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
       mesh.userData.plotCenter = center;
       mesh.userData.plotNumber = firstQueueNumbers.get(plotMeshes.length) ?? null;
+      mesh.userData.plotData = firstQueuePlotData.get(mesh.userData.plotNumber) ?? null;
       plotMeshes.push(mesh);
       interactiveMeshes.push(mesh);
     } else if (definition.color === 0xeae3ca) {
@@ -543,6 +557,68 @@ function addPlantingPines(paths) {
       plantingTrees.push({ tree, scale, profile: profiles[variant] });
       planted += 1;
     });
+  });
+}
+
+function addFence(path) {
+  const postMaterial = new THREE.MeshStandardMaterial({ color: 0x4e5554, roughness: 0.72, metalness: 0.82 });
+  const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x8b6848, roughness: 0.95 });
+  path.subPaths.forEach((subPath) => {
+    const sourcePoints = subPath.getPoints(8);
+    if (sourcePoints.length < 2) return;
+    const points = sourcePoints.map((point) => {
+      const world = worldPoint(point);
+      return new THREE.Vector3(world.x, 0, world.y);
+    });
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const start = points[index];
+      const end = points[index + 1];
+      const segment = new THREE.Vector3().subVectors(end, start);
+      const length = segment.length();
+      const steps = Math.max(1, Math.ceil(length / 2.1));
+      for (let step = 0; step < steps; step += 1) {
+        const post = start.clone().lerp(end, step / steps);
+        const postMesh = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.98, 0.06), postMaterial);
+        postMesh.position.set(post.x, 0.49, post.z);
+        postMesh.castShadow = true;
+        villageFence.add(postMesh);
+      }
+      const boardDirection = segment.clone().normalize();
+      [0.28, 0.46, 0.64, 0.82].forEach((height) => {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(length, 0.14, 0.014), boardMaterial);
+        rail.position.copy(start).add(end).multiplyScalar(0.5);
+        rail.position.y = height;
+        rail.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), boardDirection);
+        villageFence.add(rail);
+      });
+    }
+  });
+}
+
+function queueStrokeType(path) {
+  const stroke = String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase();
+  if (stroke === "#9A0062" || stroke === "RGB(154,0,98)") return "first";
+  if (stroke === "#F8C7DC" || stroke === "RGB(248,199,220)") return "second";
+  if (stroke === "#DBC7F8" || stroke === "RGB(219,199,248)") return "third";
+  return null;
+}
+
+function addQueueOutline(path, outlineGroup) {
+  path.subPaths.forEach((subPath) => {
+    const points = subPath.getPoints(8);
+    if (points.length < 2) return;
+    const positions = new Float32Array(points.length * 3);
+    points.forEach((point, index) => {
+      const world = worldPoint(point);
+      positions[index * 3] = world.x;
+      positions[index * 3 + 1] = HEIGHT_UNIT * 8;
+      positions[index * 3 + 2] = world.y;
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const line = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2, depthTest: true }));
+    line.renderOrder = 111;
+    outlineGroup.add(line);
   });
 }
 
@@ -1276,6 +1352,13 @@ async function buildModel() {
   const parsed = new SVGLoader().parse(svgText);
   const carRoute = extractCarRoute(parsed);
   const plantingPaths = parsed.paths.filter((path) => fillOf(path) === "#9A0062");
+  parsed.paths.forEach((path) => {
+    const queue = queueStrokeType(path);
+    if (queue === "first") addQueueOutline(path, firstQueueOutline);
+    if (queue === "second") addQueueOutline(path, secondQueueOutline);
+    if (queue === "third") addQueueOutline(path, thirdQueueOutline);
+  });
+  parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#055DC2").forEach(addFence);
   const lightPolePaths = parsed.paths.filter((path) => fillOf(path) === "#A93030");
   const guidePaths = parsed.paths.filter((path) => {
     const style = path.userData?.style || {};
@@ -1297,7 +1380,6 @@ async function buildModel() {
   updatePoleLights();
   seedCars(carRoute);
   seedFruitTrees();
-  seedPlaygroundEquipment();
   controls.target.copy(settlementTarget);
   controls.update();
 }
@@ -1309,6 +1391,15 @@ function setCamera(position) {
 }
 
 document.querySelector("#reset-camera").addEventListener("click", () => setCamera([-17, 40, -42]));
+const firstQueueButton = document.querySelector("#first-queue");
+[
+  [firstQueueButton, firstQueueOutline],
+  [document.querySelector("#second-queue"), secondQueueOutline],
+  [document.querySelector("#third-queue"), thirdQueueOutline],
+].forEach(([button, outline]) => {
+  button.addEventListener("pointerenter", () => { outline.visible = true; button.classList.add("active"); });
+  button.addEventListener("pointerleave", () => { outline.visible = false; button.classList.remove("active"); });
+});
 renderer.domElement.addEventListener("pointermove", (event) => {
   const bounds = renderer.domElement.getBoundingClientRect();
   pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
@@ -1316,7 +1407,7 @@ renderer.domElement.addEventListener("pointermove", (event) => {
   raycaster.setFromCamera(pointer, camera);
   const hit = raycaster.intersectObjects(interactiveMeshes, false)[0]?.object || null;
   if (hoveredPlot === hit) {
-    if (hit?.userData.plotNumber) {
+    if (hit?.userData.plotData) {
       plotLabel.style.left = `${event.clientX + 14}px`;
       plotLabel.style.top = `${event.clientY - 34}px`;
     }
@@ -1326,8 +1417,9 @@ renderer.domElement.addEventListener("pointermove", (event) => {
   hoveredPlot = hit;
   if (hoveredPlot) {
     (hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight).visible = true;
-    if (hoveredPlot.userData.plotNumber) {
-      plotLabel.textContent = hoveredPlot.userData.plotNumber;
+    if (hoveredPlot.userData.plotData) {
+      const { house, area, price, status } = hoveredPlot.userData.plotData;
+      plotLabel.innerHTML = `<div class="plot-tooltip-row"><span>Дом</span><strong>${house}</strong></div><div class="plot-tooltip-row"><span>Площадь</span><strong>${area} сот.</strong></div><div class="plot-tooltip-row"><span>Цена</span><strong>${price ? `${price} млн ₽` : "не указана"}</strong></div><div class="plot-tooltip-row"><span>Статус</span><strong>${status}</strong></div>`;
       plotLabel.style.left = `${event.clientX + 14}px`;
       plotLabel.style.top = `${event.clientY - 34}px`;
       plotLabel.classList.add("visible");
