@@ -242,7 +242,11 @@ const houseShadows = [];
 const houseLights = [];
 const houseGlows = [];
 const poleLights = [];
+const entranceLights = [];
+const entranceGlows = [];
 const poleGlows = [];
+const axisLabels = [];
+const entranceGateGroups = [];
 let lastDaylightLevel = daylightLevel;
 let nightScheduleActive = false;
 const plantingTrees = [];
@@ -294,7 +298,13 @@ thirdQueueOutline.visible = false;
 map.add(thirdQueueOutline);
 const villageFence = new THREE.Group();
 map.add(villageFence);
+const innerFence = new THREE.Group();
+map.add(innerFence);
+const gateOpeningCenters = [];
+const forestFence = new THREE.Group();
+map.add(forestFence);
 const publicMeshes = [];
+let storeZonePolygon = null;
 const movingCars = [];
 const publicLabels = ["Спортивная площадка", "Магазин", "Фруктовый сад", "Детская площадка", null, null];
 const firstQueueNumbers = new Map([
@@ -364,8 +374,10 @@ const layers = {
   "#B4ED92": { name: "Посадка", elevation: 0, height: 0, color: 0xb4ed92, hidden: true },
   "#EAE3CA": { name: "Общественные места", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xeae3ca },
   "#A4C1E3": { name: "Электрическая подстанция", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xa4c1e3, isSubstation: true },
-  "#CD80DD": { name: "Участки домов", elevation: HEIGHT_UNIT * 2.5, height: HEIGHT_UNIT, color: 0xcee593, isPlot: true },
+  "#CD80DD": { name: "Участки домов", elevation: 0.08, height: HEIGHT_UNIT, color: 0xcee593, isPlot: true },
 };
+layers["#9AA0A3"].elevation = 0.085;
+layers["#B7DAD2"].elevation = 0.07;
 const forestPolygons = [];
 const treeTrunk = new THREE.MeshStandardMaterial({ color: 0x75583d, roughness: 0.9, depthTest: false, depthWrite: false });
 const treeCrowns = [
@@ -517,9 +529,10 @@ function addTerritory(path, definition) {
     } else if (definition.color === 0xeae3ca) {
       const points = shape.extractPoints(8).shape;
       const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
+      mesh.visible = false;
       publicMeshes.push({ mesh, point: worldPoint(center), shape, name: publicLabels[publicMeshes.length] ?? null });
     }
-    if (definition.color === 0xeae3ca || definition.isSubstation) {
+    if (definition.isSubstation) {
       mesh.userData.hoverHighlight = addPlotOutline(shape, definition.elevation + definition.height);
       interactiveMeshes.push(mesh);
     }
@@ -562,7 +575,7 @@ function addPlantingPines(paths) {
 
 function addFence(path) {
   const postMaterial = new THREE.MeshStandardMaterial({ color: 0x4e5554, roughness: 0.72, metalness: 0.82 });
-  const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x8b6848, roughness: 0.95 });
+  const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x4e413c, roughness: 0.95 });
   path.subPaths.forEach((subPath) => {
     const sourcePoints = subPath.getPoints(8);
     if (sourcePoints.length < 2) return;
@@ -578,7 +591,7 @@ function addFence(path) {
       const steps = Math.max(1, Math.ceil(length / 2.1));
       for (let step = 0; step < steps; step += 1) {
         const post = start.clone().lerp(end, step / steps);
-        const postMesh = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.98, 0.06), postMaterial);
+        const postMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.98, 0.04), postMaterial);
         postMesh.position.set(post.x, 0.49, post.z);
         postMesh.castShadow = true;
         villageFence.add(postMesh);
@@ -591,6 +604,112 @@ function addFence(path) {
         rail.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), boardDirection);
         villageFence.add(rail);
       });
+    }
+  });
+}
+
+function addInnerFence(path) {
+  const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x777b7a, roughness: 0.9 });
+  const supportMaterial = new THREE.MeshStandardMaterial({ color: 0x606463, roughness: 0.88, metalness: 0.15 });
+  const boardWidth = 0.06;
+  const fenceHeight = 0.4116;
+  path.subPaths.forEach((subPath) => {
+    const sourcePoints = subPath.getPoints(8);
+    if (sourcePoints.length < 2) return;
+    const points = sourcePoints.map((point) => {
+      const world = worldPoint(point);
+      return new THREE.Vector3(world.x, 0, world.y);
+    });
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const start = points[index];
+      const end = points[index + 1];
+      const segment = new THREE.Vector3().subVectors(end, start);
+      const length = segment.length();
+      const direction = segment.clone().normalize();
+      const segmentCenter = start.clone().add(end).multiplyScalar(0.5);
+      if (gateOpeningCenters.some((opening) => opening.distanceTo(segmentCenter) < 0.28)) continue;
+      const boardPitch = boardWidth * 2;
+      const boardCount = Math.max(1, Math.ceil(length / boardPitch));
+      for (let boardIndex = 0; boardIndex < boardCount; boardIndex += 1) {
+        const board = new THREE.Mesh(new THREE.BoxGeometry(boardWidth, fenceHeight, 0.014), boardMaterial);
+        board.position.copy(start).add(end).multiplyScalar(0.5);
+        board.position.add(direction.clone().multiplyScalar((boardIndex + 0.5) * length / boardCount - length / 2));
+        board.position.y = fenceHeight / 2;
+        board.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction);
+        innerFence.add(board);
+      }
+      [0.1176, 0.3108].forEach((height) => {
+        const support = new THREE.Mesh(new THREE.BoxGeometry(length, 0.0275, 0.01375), supportMaterial);
+        support.position.copy(start).add(end).multiplyScalar(0.5);
+        support.position.y = height;
+        support.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction);
+        innerFence.add(support);
+      });
+    }
+  });
+}
+
+function addConcreteGate(path) {
+  const shape = SVGLoader.createShapes(path)[0];
+  if (!shape) return;
+  const points = shape.extractPoints(4).shape;
+  if (points.length < 4) return;
+  const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+  const centerSource = bounds.getCenter(new THREE.Vector2());
+  const center = worldPoint(centerSource);
+  const edge = worldPoint(points[1]).sub(worldPoint(points[0])).normalize();
+  gateOpeningCenters.push(new THREE.Vector3(center.x, 0, center.y));
+  const group = new THREE.Group();
+  group.position.set(center.x, 0, center.y);
+  group.rotation.y = Math.atan2(-edge.y, edge.x);
+  group.scale.setScalar(1.2);
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x9b9b96, roughness: 0.92 });
+  const addBox = (geometry, position) => {
+    const mesh = new THREE.Mesh(geometry, concrete);
+    mesh.position.set(...position);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  };
+  addBox(new THREE.BoxGeometry(0.06, 0.49, 0.11), [-0.085, 0.245, 0]);
+  addBox(new THREE.BoxGeometry(0.06, 0.49, 0.11), [0.085, 0.245, 0]);
+  addBox(new THREE.BoxGeometry(0.23, 0.06, 0.11), [0, 0.46, 0]);
+  map.add(group);
+}
+
+function addForestFence(path) {
+  const postMaterial = new THREE.MeshStandardMaterial({ color: 0x1f4d32, roughness: 0.72, metalness: 0.72 });
+  const rodMaterial = new THREE.MeshStandardMaterial({ color: 0x1f4d32, roughness: 0.8, metalness: 0.45 });
+  const fenceHeight = 0.98;
+  const postSpacing = 2.1;
+  const rodSpacing = 0.22;
+  path.subPaths.forEach((subPath) => {
+    const sourcePoints = subPath.getPoints(8);
+    if (sourcePoints.length < 2) return;
+    const points = sourcePoints.map((point) => {
+      const world = worldPoint(point);
+      return new THREE.Vector3(world.x, 0, world.y);
+    });
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const start = points[index];
+      const end = points[index + 1];
+      const segment = new THREE.Vector3().subVectors(end, start);
+      const length = segment.length();
+      const direction = segment.clone().normalize();
+      const postCount = Math.max(1, Math.ceil(length / postSpacing));
+      for (let postIndex = 0; postIndex < postCount; postIndex += 1) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.04, fenceHeight, 0.04), postMaterial);
+        post.position.copy(start).add(direction.clone().multiplyScalar((postIndex + 0.5) * length / postCount));
+        post.position.y = fenceHeight / 2;
+        forestFence.add(post);
+      }
+      const rodCount = Math.max(1, Math.ceil(length / rodSpacing));
+      for (let rodIndex = 0; rodIndex < rodCount; rodIndex += 1) {
+        const rod = new THREE.Mesh(new THREE.BoxGeometry(0.018, fenceHeight, 0.018), rodMaterial);
+        rod.position.copy(start).add(direction.clone().multiplyScalar((rodIndex + 0.5) * length / rodCount));
+        rod.position.y = fenceHeight / 2;
+        forestFence.add(rod);
+      }
     }
   });
 }
@@ -690,6 +809,89 @@ function extractCarRoute(parsed) {
     });
   });
   return points.length > 1 ? points : null;
+}
+
+function addEntranceGroup(path) {
+  const shape = SVGLoader.createShapes(path)[0];
+  if (!shape) return;
+  const points = shape.extractPoints(4).shape;
+  if (points.length < 4) return;
+  const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+  const sourceCenter = bounds.getCenter(new THREE.Vector2());
+  const center = worldPoint(sourceCenter);
+  const worldEdge = worldPoint(points[1]).sub(worldPoint(points[0])).normalize();
+  const group = new THREE.Group();
+  group.position.set(center.x, 0, center.y);
+  group.rotation.y = Math.atan2(-worldEdge.y, worldEdge.x);
+  const green = new THREE.MeshStandardMaterial({ color: 0x4d7e42, roughness: 0.8 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x8fb7bd, roughness: 0.22, metalness: 0.1, transparent: true, opacity: 0.72, emissive: 0xffb56b, emissiveIntensity: 0 });
+  const addBox = (geometry, material, position) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(...position);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    return mesh;
+  };
+
+  addBox(new THREE.BoxGeometry(2.97, 0.72, 1.93), glass, [0, 0.36, 0]);
+  addBox(new THREE.BoxGeometry(3.01, 0.38, 1.97), green, [0, 0.91, 0]);
+  map.add(group);
+  const light = new THREE.PointLight(0xffb56b, 0, 4.5, 2);
+  light.position.set(0, 0.8, 0);
+  group.add(light);
+  entranceLights.push({ light, materials: [glass] });
+  const glow = new THREE.Mesh(new THREE.CircleGeometry(1, 32), houseGlowMaterial);
+  glow.rotation.x = -Math.PI / 2;
+  glow.rotation.z = group.rotation.y;
+  glow.position.set(center.x, 0.07, center.y);
+  glow.scale.set(4.4, 2.9, 1);
+  glow.renderOrder = 25;
+  glow.visible = false;
+  map.add(glow);
+  entranceGlows.push(glow);
+}
+
+function addEntranceLogo(svgText) {
+  const parsed = new SVGLoader().parse(svgText);
+  const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide, emissive: 0xffffff, emissiveIntensity: 0 });
+  const shapes = parsed.paths.filter((path) => fillOf(path) === "#D7FFCD").flatMap((path) => SVGLoader.createShapes(path));
+  entranceGateGroups.forEach((gate, index) => {
+    const logoGroup = new THREE.Group();
+    shapes.forEach((shape) => {
+      const geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.035, bevelEnabled: false, curveSegments: 2 });
+      geometry.translate(-2457, -1088, 0);
+      geometry.scale(0.000475, -0.000475, 1);
+      logoGroup.add(new THREE.Mesh(geometry, material));
+    });
+    logoGroup.position.set(0.22, 1.16, 0);
+    logoGroup.rotation.y = Math.PI / 2;
+    gate.add(logoGroup);
+    entranceLights[index]?.materials.push(material);
+  });
+}
+
+function addEntranceGate(path) {
+  const shape = SVGLoader.createShapes(path)[0];
+  if (!shape) return;
+  const points = shape.extractPoints(4).shape;
+  const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+  const center = worldPoint(bounds.getCenter(new THREE.Vector2()));
+  const edge = worldPoint(points[1]).sub(worldPoint(points[0])).normalize();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x744b35, roughness: 0.88 });
+  const group = new THREE.Group();
+  group.position.set(center.x, 0, center.y);
+  group.rotation.y = Math.atan2(-edge.y, edge.x);
+  const addBox = (geometry, material, position) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(...position);
+    mesh.castShadow = true;
+    group.add(mesh);
+  };
+  addBox(new THREE.BoxGeometry(0.36, 0.94, 0.16), wood, [0, 0.47, -1.07]);
+  addBox(new THREE.BoxGeometry(0.36, 0.16, 2.30), wood, [0, 1.02, 0]);
+  map.add(group);
+  entranceGateGroups.push(group);
 }
 
 function seedCars(routeSourcePoints = null) {
@@ -1051,11 +1253,19 @@ function updatePoleLights() {
     light.intensity = 0.85 * intensity;
     lamp.material.emissiveIntensity = 1.4 * intensity;
   });
+  entranceLights.forEach(({ light, materials }) => {
+    light.intensity = 2.2 * intensity;
+    materials.forEach((material) => { material.emissiveIntensity = 0.9 * intensity; });
+  });
+  entranceGlows.forEach((glow) => {
+    glow.visible = active && night > 0.001;
+    glow.material.opacity = 0.84 * intensity;
+  });
   const cameraDistance = camera.position.distanceTo(controls.target);
   poleGlows.forEach((glow) => {
     glow.visible = active && night > 0.001;
     glow.material.opacity = 0.84 * intensity;
-    glow.position.y = layers["#98B4BA"].elevation + layers["#98B4BA"].height + Math.max(0.004, cameraDistance * 0.00018);
+    glow.position.y = 0.09;
   });
 }
 
@@ -1139,7 +1349,6 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
       direction,
     };
   }).filter(Boolean);
-  let poleNumber = 0;
   lightPolePaths.forEach((path) => {
     SVGLoader.createShapes(path).forEach((shape) => {
       const points = shape.extractPoints(4).shape;
@@ -1149,7 +1358,6 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
       const center = worldPoint(sourceCenter);
       const pole = new THREE.Group();
       pole.position.set(center.x, poleBaseY, center.y);
-      poleNumber += 1;
       const nearestGuide = guides.reduce((best, guide) => {
         if (!best) return guide;
         return guide.anchor.distanceToSquared(sourceCenter) < best.anchor.distanceToSquared(sourceCenter) ? guide : best;
@@ -1159,18 +1367,18 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
         // Orientation comes exclusively from the green guide line.
         pole.rotation.y = Math.atan2(-nearestGuide.direction.y, nearestGuide.direction.x);
       }
-      if (poleNumber === 3) pole.rotation.y += Math.PI;
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 1.35, 8), poleMaterial);
+      const poleSection = 0.08 / 1.5;
+      const shaft = new THREE.Mesh(new THREE.BoxGeometry(poleSection, 1.35, poleSection), poleMaterial);
       shaft.position.y = 0.675;
       shaft.castShadow = false;
       const arm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.035), poleMaterial);
       arm.position.set(0.09, 1.35, 0);
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), lampMaterial);
-      lamp.position.set(0.19, 1.31, 0);
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.18, poleSection, poleSection), lampMaterial);
+      lamp.position.set(0.29, 1.35, 0);
       pole.add(shaft, arm, lamp);
       map.add(pole);
       const light = new THREE.PointLight(0xffc36e, 0, 3.8, 2);
-      light.position.set(0.19, 1.28, 0);
+      light.position.set(0.29, 1.35, 0);
       pole.add(light);
       poleLights.push({ light, lamp });
       const glow = new THREE.Mesh(new THREE.CircleGeometry(1, 16), houseGlowMaterial);
@@ -1351,6 +1559,9 @@ async function buildModel() {
   const svgText = await response.text();
   const parsed = new SVGLoader().parse(svgText);
   const carRoute = extractCarRoute(parsed);
+  parsed.paths.filter((path) => fillOf(path) === "#FF8C8C").forEach(addConcreteGate);
+  const storeZonePath = parsed.paths.find((path) => fillOf(path) === "#DB6A6A");
+  storeZonePolygon = storeZonePath ? SVGLoader.createShapes(storeZonePath)[0]?.extractPoints(8).shape ?? null : null;
   const plantingPaths = parsed.paths.filter((path) => fillOf(path) === "#9A0062");
   parsed.paths.forEach((path) => {
     const queue = queueStrokeType(path);
@@ -1358,7 +1569,12 @@ async function buildModel() {
     if (queue === "second") addQueueOutline(path, secondQueueOutline);
     if (queue === "third") addQueueOutline(path, thirdQueueOutline);
   });
+  parsed.paths.filter((path) => fillOf(path) === "#DB6A6A").forEach(addEntranceGroup);
+  parsed.paths.filter((path) => fillOf(path) === "#B85555").forEach(addEntranceGate);
+  const logoResponse = await fetch("./лого.svg");
+  if (logoResponse.ok) addEntranceLogo(await logoResponse.text());
   parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#055DC2").forEach(addFence);
+  parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#FF6043").forEach(addInnerFence);
   const lightPolePaths = parsed.paths.filter((path) => fillOf(path) === "#A93030");
   const guidePaths = parsed.paths.filter((path) => {
     const style = path.userData?.style || {};
@@ -1413,10 +1629,14 @@ renderer.domElement.addEventListener("pointermove", (event) => {
     }
     return;
   }
-  if (hoveredPlot) (hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight).visible = false;
+  if (hoveredPlot) {
+    const highlight = hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight;
+    if (highlight) highlight.visible = false;
+  }
   hoveredPlot = hit;
   if (hoveredPlot) {
-    (hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight).visible = true;
+    const highlight = hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight;
+    if (highlight) highlight.visible = true;
     if (hoveredPlot.userData.plotData) {
       const { house, area, price, status } = hoveredPlot.userData.plotData;
       plotLabel.innerHTML = `<div class="plot-tooltip-row"><span>Дом</span><strong>${house}</strong></div><div class="plot-tooltip-row"><span>Площадь</span><strong>${area} сот.</strong></div><div class="plot-tooltip-row"><span>Цена</span><strong>${price ? `${price} млн ₽` : "не указана"}</strong></div><div class="plot-tooltip-row"><span>Статус</span><strong>${status}</strong></div>`;
@@ -1430,7 +1650,10 @@ renderer.domElement.addEventListener("pointermove", (event) => {
 });
 
 renderer.domElement.addEventListener("pointerleave", () => {
-  if (hoveredPlot) (hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight).visible = false;
+  if (hoveredPlot) {
+    const highlight = hoveredPlot.userData.plotHighlight || hoveredPlot.userData.hoverHighlight;
+    if (highlight) highlight.visible = false;
+  }
   hoveredPlot = null;
   plotLabel.classList.remove("visible");
 });

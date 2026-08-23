@@ -8,13 +8,16 @@ export function createYoungFruitTree(variant = 1) {
   const fruitMaterial = new THREE.MeshStandardMaterial({ color: 0xd83d3d, roughness: 0.72 });
   const trunkHeight = 0.72 * scale;
   const crownRadius = (variant === 2 ? 0.25 : variant === 3 ? 0.31 : 0.28) * scale * 1.75;
+  const crownHeight = crownRadius * 1.8;
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.04 * scale, 0.065 * scale, trunkHeight, 6), trunkMaterial);
   trunk.position.y = trunkHeight / 2;
   tree.add(trunk);
 
-  const crown = new THREE.Mesh(new THREE.SphereGeometry(crownRadius, 10, 8), leafMaterial);
-  crown.position.y = trunkHeight + crownRadius * 0.82;
-  crown.scale.set(1, 0.92, 1);
+  const crownGeometry = variant === 2
+    ? new THREE.CylinderGeometry(crownRadius * 0.88, crownRadius * 0.88, crownHeight, 10, 1)
+    : new THREE.CylinderGeometry(crownRadius * 0.55, crownRadius, crownHeight, 10, 1);
+  const crown = new THREE.Mesh(crownGeometry, leafMaterial);
+  crown.position.y = trunkHeight + crownHeight / 2;
   tree.add(crown);
 
   const fruits = variant === 3 ? 4 : 3;

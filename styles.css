@@ -303,6 +303,15 @@ select {
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
+.axis-label {
+  position: absolute;
+  z-index: 8;
+  color: #ffffff;
+  font: 700 14px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
 .plot-tooltip-row { display: flex; justify-content: space-between; gap: 18px; line-height: 1.45; }
 .plot-tooltip-row span { color: #a9b8b1; }
 .plot-tooltip-row strong { color: #fff; font-weight: 600; }
