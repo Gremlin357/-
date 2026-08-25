@@ -43,12 +43,27 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.48;
 controls.minDistance = 30;
-controls.maxDistance = 190;
+controls.maxDistance = 140;
+const MIN_CAMERA_HEIGHT = 0.2;
+let settlementBounds = null;
+const clampCameraTarget = () => {
+  if (!settlementBounds) return;
+  const viewMargin = Math.min(25, controls.getDistance() * 0.3);
+  const minX = settlementBounds.min.x + viewMargin;
+  const maxX = settlementBounds.max.x - viewMargin;
+  const minZ = settlementBounds.min.y + viewMargin;
+  const maxZ = settlementBounds.max.y - viewMargin;
+  controls.target.x = THREE.MathUtils.clamp(controls.target.x, Math.min(minX, maxX), Math.max(minX, maxX));
+  controls.target.z = THREE.MathUtils.clamp(controls.target.z, Math.min(minZ, maxZ), Math.max(minZ, maxZ));
+};
 const updateCameraReadout = () => {
   const format = (value) => value.toFixed(2);
-  cameraReadout.innerHTML = `[${camera.position.toArray().map(format).join(", ")}]<br>[${controls.target.toArray().map(format).join(", ")}]`;
+  const zoomDistance = controls.getDistance().toFixed(2);
+  cameraReadout.innerHTML = `[${camera.position.toArray().map(format).join(", ")}]<br>[${controls.target.toArray().map(format).join(", ")}]<br>Масштаб: ${zoomDistance}`;
 };
 controls.addEventListener("change", () => {
+  clampCameraTarget();
+  if (camera.position.y < MIN_CAMERA_HEIGHT) camera.position.y = MIN_CAMERA_HEIGHT;
   console.log("Camera:", camera.position.toArray(), "Target:", controls.target.toArray());
   updateCameraReadout();
 });
@@ -179,7 +194,7 @@ scene.add(moonSprite);
 
 const sunDial = document.createElement("div");
 sunDial.className = "sun-dial";
-sunDial.innerHTML = "<div class=\"sun-dial__title\">Солнце</div><div class=\"sun-dial__ring\"><span class=\"sun-dial__dot\"></span><b class=\"sun-dial__east\">Восток</b><b class=\"sun-dial__zenith\">Зенит</b><b class=\"sun-dial__west\">Запад</b><b class=\"sun-dial__nadir\">Надир</b></div>";
+sunDial.innerHTML = "<div class=\"sun-dial__ring\"><span class=\"sun-dial__dot\"></span><b class=\"sun-dial__east\">Восток</b><b class=\"sun-dial__zenith\">Зенит</b><b class=\"sun-dial__west\">Запад</b><b class=\"sun-dial__nadir\">Надир</b></div>";
 host.appendChild(sunDial);
 const sunDialRing = sunDial.querySelector(".sun-dial__ring");
 const sunDialDot = sunDial.querySelector(".sun-dial__dot");
@@ -520,6 +535,11 @@ function addTerritory(path, definition) {
     if (definition.isPlot) {
       mesh.userData.plotHighlight = addPlotOutline(shape, definition.elevation + definition.height);
       const points = shape.extractPoints(8).shape;
+      if (!settlementBounds) settlementBounds = new THREE.Box2();
+      points.forEach((point) => {
+        const world = worldPoint(point);
+        settlementBounds.expandByPoint(world);
+      });
       const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
       mesh.userData.plotCenter = center;
       mesh.userData.plotNumber = firstQueueNumbers.get(plotMeshes.length) ?? null;
@@ -735,7 +755,7 @@ function addQueueOutline(path, outlineGroup) {
     });
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const line = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2, depthTest: true }));
+    const line = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color: 0xd7ffcd, linewidth: 2, depthTest: true }));
     line.renderOrder = 111;
     outlineGroup.add(line);
   });
@@ -961,7 +981,7 @@ function seedFruitTrees() {
     if (!isInsidePolygon(sourcePoint, polygon)) return;
     const point = worldPoint(sourcePoint);
     const tree = factories[planted % factories.length]();
-    tree.scale.setScalar(0.46 + (planted % 3) * 0.04);
+    tree.scale.setScalar(0.345 + (planted % 3) * 0.03);
     tree.position.set(point.x, baseY, point.y);
     tree.rotation.y = (planted * 1.7) % (Math.PI * 2);
     map.add(tree);
@@ -1591,11 +1611,13 @@ async function buildModel() {
   addPlantingPines(plantingPaths);
   seedLightPoles(lightPolePaths, guidePaths);
   map.updateMatrixWorld(true);
+  updateFirstQueuePointer();
   updateHouseShadows();
   updateHouseLights();
   updatePoleLights();
   seedCars(carRoute);
   seedFruitTrees();
+  settlementBounds?.expandByScalar(6);
   controls.target.copy(settlementTarget);
   controls.update();
 }
@@ -1608,14 +1630,145 @@ function setCamera(position) {
 
 document.querySelector("#reset-camera").addEventListener("click", () => setCamera([-17, 40, -42]));
 const firstQueueButton = document.querySelector("#first-queue");
+const firstQueueFlag = document.createElement("img");
+firstQueueFlag.className = "first-queue-flag";
+firstQueueFlag.src = "./1.svg?rev=1";
+firstQueueFlag.alt = "";
+document.querySelector(".viewport").appendChild(firstQueueFlag);
+const firstQueueFlagBlur = document.createElement("div");
+firstQueueFlagBlur.className = "first-queue-flag-blur";
+document.querySelector(".viewport").appendChild(firstQueueFlagBlur);
+const firstQueueFlagText = document.createElement("div");
+firstQueueFlagText.className = "first-queue-flag-text";
+firstQueueFlagText.innerHTML = "<strong>очередь строительства</strong><br>центральный въезд<br>17 домовладений<br>330 м.п. дорог<br>фруктовый сад";
+document.querySelector(".viewport").appendChild(firstQueueFlagText);
+const firstQueuePointerLine = document.createElement("span");
+firstQueuePointerLine.className = "first-queue-pointer-line";
+const firstQueuePointerDot = document.createElement("span");
+firstQueuePointerDot.className = "first-queue-pointer-dot";
+document.querySelector(".viewport").append(firstQueuePointerLine, firstQueuePointerDot);
+const updateFirstQueuePointer = () => {
+  const visible = firstQueueFlag.classList.contains("visible");
+  firstQueuePointerLine.classList.toggle("visible", visible);
+  firstQueuePointerDot.classList.toggle("visible", visible);
+  firstQueueFlagBlur.classList.toggle("visible", visible);
+  firstQueueFlagText.classList.toggle("visible", visible);
+  if (!visible || !firstQueueOutline.children.length) return;
+  const viewport = document.querySelector(".viewport").getBoundingClientRect();
+  const canvas = renderer.domElement.getBoundingClientRect();
+  const preferredFlagX = viewport.width * 0.78;
+  let targetSegment = null;
+  firstQueueOutline.traverse((object) => {
+    const position = object.geometry?.attributes?.position;
+    if (!position) return;
+    for (let index = 0; index < position.count; index += 1) {
+      if (index === position.count - 1) continue;
+      const start = new THREE.Vector3().fromBufferAttribute(position, index).applyMatrix4(object.matrixWorld).project(camera);
+      const end = new THREE.Vector3().fromBufferAttribute(position, index + 1).applyMatrix4(object.matrixWorld).project(camera);
+      const midpointX = canvas.left - viewport.left + ((start.x + end.x) / 2 + 1) * canvas.width / 2;
+      const midpointY = canvas.top - viewport.top + (1 - (start.y + end.y) / 2) * canvas.height / 2;
+      if (midpointY < viewport.height * 0.32) continue;
+      const score = Math.abs(midpointX - preferredFlagX);
+      if (!targetSegment || score < targetSegment.score) targetSegment = { start, end, score };
+    }
+  });
+  if (!targetSegment) return;
+  const targetPoint = targetSegment.start.clone().lerp(targetSegment.end, 0.5);
+  const targetX = canvas.left - viewport.left + (targetPoint.x + 1) * canvas.width / 2;
+  const targetY = canvas.top - viewport.top + (1 - targetPoint.y) * canvas.height / 2;
+  const preferredTargetX = targetX;
+  const preferredFlagBottom = Math.min(targetY - 32, viewport.height * 0.32);
+  firstQueueFlag.style.left = `${preferredTargetX}px`;
+  firstQueueFlag.style.top = `${preferredFlagBottom}px`;
+  const initialFlagBounds = firstQueueFlag.getBoundingClientRect();
+  const clampedX = THREE.MathUtils.clamp(preferredTargetX, initialFlagBounds.width / 2, viewport.width - initialFlagBounds.width / 2);
+  const clampedBottom = THREE.MathUtils.clamp(preferredFlagBottom, initialFlagBounds.height, viewport.height);
+  firstQueueFlag.style.left = `${clampedX}px`;
+  firstQueueFlag.style.top = `${clampedBottom}px`;
+  const flagBounds = firstQueueFlag.getBoundingClientRect();
+  const panelLeft = flagBounds.left - viewport.left + flagBounds.width / 2 - 30;
+  const panelTop = Math.max(160, Math.min(targetY - 150, 20));
+  firstQueueFlagText.style.left = `${panelLeft}px`;
+  firstQueueFlagText.style.top = `${panelTop}px`;
+  firstQueueFlagText.style.width = "235px";
+  const textBounds = firstQueueFlagText.getBoundingClientRect();
+  firstQueueFlag.style.left = `${panelLeft + 30}px`;
+  firstQueueFlag.style.top = `${panelTop - 8}px`;
+  firstQueueFlagBlur.style.left = `${textBounds.left - viewport.left}px`;
+  firstQueueFlagBlur.style.top = `${textBounds.top - viewport.top}px`;
+  firstQueueFlagBlur.style.width = `${textBounds.width}px`;
+  firstQueueFlagBlur.style.height = `${textBounds.height}px`;
+  const startX = targetX;
+  const startY = textBounds.bottom - viewport.top;
+  const dy = Math.max(0, targetY - startY);
+  firstQueuePointerLine.style.left = `${startX}px`;
+  firstQueuePointerLine.style.top = `${startY}px`;
+  firstQueuePointerLine.style.width = `${dy}px`;
+  firstQueuePointerLine.style.transform = "rotate(90deg)";
+  firstQueuePointerDot.style.left = `${startX}px`;
+  firstQueuePointerDot.style.top = `${startY + dy}px`;
+};
 [
   [firstQueueButton, firstQueueOutline],
   [document.querySelector("#second-queue"), secondQueueOutline],
   [document.querySelector("#third-queue"), thirdQueueOutline],
 ].forEach(([button, outline]) => {
-  button.addEventListener("pointerenter", () => { outline.visible = true; button.classList.add("active"); });
-  button.addEventListener("pointerleave", () => { outline.visible = false; button.classList.remove("active"); });
+  button.addEventListener("pointerenter", () => {
+    outline.visible = true;
+    button.classList.add("active");
+    if (button === firstQueueButton) firstQueueFlag.classList.add("visible");
+    updateFirstQueuePointer();
+  });
+  button.addEventListener("pointerleave", () => {
+    outline.visible = false;
+    button.classList.remove("active");
+    if (button === firstQueueButton) firstQueueFlag.classList.remove("visible");
+    updateFirstQueuePointer();
+  });
 });
+const extraQueueFlags = [
+  { button: document.querySelector("#second-queue"), outline: secondQueueOutline, digit: "2", text: "<strong>очередь строительства</strong><br>отдельный въезд<br>39 домовладений<br>590 м.п. дорог<br>детская площадка" },
+  { button: document.querySelector("#third-queue"), outline: thirdQueueOutline, digit: "3", text: "<strong>очередь строительства</strong><br>отдельный въезд<br>31 домовладение<br>410 м.п. дорог<br>спортивная площадка" },
+];
+extraQueueFlags.forEach((item) => {
+  item.flag = document.createElement("img"); item.flag.className = `queue-flag queue-flag-${item.digit}`; item.flag.src = `./${item.digit}.svg?rev=1`; item.flag.alt = "";
+  item.textNode = document.createElement("div"); item.textNode.className = "queue-flag-text"; item.textNode.innerHTML = item.text;
+  item.line = document.createElement("span"); item.line.className = "queue-flag-line"; item.dot = document.createElement("span"); item.dot.className = "queue-flag-dot";
+  document.querySelector(".viewport").append(item.flag, item.textNode, item.line, item.dot);
+  item.button.addEventListener("pointerenter", () => [item.flag, item.textNode, item.line, item.dot].forEach((node) => node.classList.add("visible")));
+  item.button.addEventListener("pointerleave", () => [item.flag, item.textNode, item.line, item.dot].forEach((node) => node.classList.remove("visible")));
+});
+const updateExtraQueueFlags = () => {
+  const viewport = document.querySelector(".viewport").getBoundingClientRect();
+  const canvas = renderer.domElement.getBoundingClientRect();
+  extraQueueFlags.forEach((item) => {
+    if (!item.flag.classList.contains("visible")) return;
+    let targetSegment = null;
+    const preferredX = canvas.left - viewport.left + canvas.width * 0.78;
+    item.outline.traverse((object) => {
+      const position = object.geometry?.attributes?.position;
+      if (!position) return;
+      for (let index = 0; index < position.count - 1; index += 1) {
+        const start = new THREE.Vector3().fromBufferAttribute(position, index).applyMatrix4(object.matrixWorld).project(camera);
+        const end = new THREE.Vector3().fromBufferAttribute(position, index + 1).applyMatrix4(object.matrixWorld).project(camera);
+        const midpointX = canvas.left - viewport.left + ((start.x + end.x) / 2 + 1) * canvas.width / 2;
+        const midpointY = canvas.top - viewport.top + (1 - (start.y + end.y) / 2) * canvas.height / 2;
+        const score = Math.abs(midpointX - preferredX) + (midpointY < canvas.height * 0.25 ? 1000 : 0);
+        if (!targetSegment || score < targetSegment.score) targetSegment = { start, end, score };
+      }
+    });
+    if (!targetSegment) return;
+    const targetPoint = targetSegment.start.clone().lerp(targetSegment.end, 0.5);
+    const x = canvas.left - viewport.left + (targetPoint.x + 1) * canvas.width / 2; const y = canvas.top - viewport.top + (1 - targetPoint.y) * canvas.height / 2;
+    // Keep the pointer 30px inside the panel, matching the first queue flag.
+    const panelLeft = x - 30;
+    const panelTop = canvas.top - viewport.top + Math.max(40, Math.min(y - 150, canvas.height * 0.32));
+    item.flag.style.left = `${x}px`; item.flag.style.top = `${panelTop - 8}px`;
+    const flagBounds = item.flag.getBoundingClientRect(); item.textNode.style.left = `${panelLeft}px`; item.textNode.style.top = `${panelTop}px`;
+    const textBounds = item.textNode.getBoundingClientRect(); const startX = x; const startY = textBounds.bottom - viewport.top; const endY = Math.max(startY, y);
+    item.line.style.left = `${startX}px`; item.line.style.top = `${startY}px`; item.line.style.width = `${endY - startY}px`; item.line.style.transform = "rotate(90deg)"; item.dot.style.left = `${startX}px`; item.dot.style.top = `${endY}px`;
+  });
+};
 renderer.domElement.addEventListener("pointermove", (event) => {
   const bounds = renderer.domElement.getBoundingClientRect();
   pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
@@ -1643,6 +1796,8 @@ renderer.domElement.addEventListener("pointermove", (event) => {
       plotLabel.style.left = `${event.clientX + 14}px`;
       plotLabel.style.top = `${event.clientY - 34}px`;
       plotLabel.classList.add("visible");
+    } else {
+      plotLabel.classList.remove("visible");
     }
   } else {
     plotLabel.classList.remove("visible");
@@ -1668,6 +1823,8 @@ function animate() {
   controls.update();
   if (!sunDragging) setSunPhase(sunPhase - 0.0007);
   map.updateMatrixWorld(true);
+  updateFirstQueuePointer();
+  updateExtraQueueFlags();
   updateHouseShadows();
   updateHouseLights();
   updatePoleLights();

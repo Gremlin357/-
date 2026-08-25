@@ -225,6 +225,54 @@ select {
 }
 .logo-controls .queue-button.active,
 .logo-controls .queue-button:hover { border-color: #ffffff; background: rgba(79, 141, 91, 0.9); }
+.first-queue-flag {
+  position: absolute;
+  z-index: 10;
+  display: none;
+  width: 60px;
+  height: auto;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% + 14px));
+}
+.first-queue-flag.visible { display: block; }
+.first-queue-flag-blur {
+  position: absolute;
+  z-index: 9;
+  display: none;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.first-queue-flag-blur.visible { display: block; }
+.first-queue-flag-text {
+  position: absolute;
+  z-index: 11;
+  display: none;
+  color: #ffffff;
+  font: 400 15px/1.3 Inter, "Segoe UI", sans-serif;
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.65);
+  box-sizing: border-box;
+  padding: 10px 12px;
+  pointer-events: none;
+}
+.first-queue-flag-text strong { font-weight: 700; }
+.first-queue-flag-text.visible { display: block; }
+.first-queue-pointer-line,
+.first-queue-pointer-dot { position: absolute; z-index: 11; display: none; pointer-events: none; }
+.first-queue-pointer-line { height: 2px; transform-origin: 0 50%; background: #d7ffcd; box-shadow: 0 0 5px rgba(215, 255, 205, .85); }
+.first-queue-pointer-dot { width: 9px; height: 9px; margin: -4px 0 0 -4px; border-radius: 50%; background: #d7ffcd; box-shadow: 0 0 10px 3px rgba(215, 255, 205, .8); }
+.first-queue-pointer-line.visible,
+.first-queue-pointer-dot.visible { display: block; }
+.queue-flag,.queue-flag-text,.queue-flag-line,.queue-flag-dot { position:absolute; z-index:10; display:none; pointer-events:none; }
+.queue-flag { width:60px; height:auto; transform:translate(-50%,-100%); }
+.queue-flag-2 { width:92px; margin-left:17px; margin-top:18px; z-index:12; }
+.queue-flag.visible,.queue-flag-text.visible,.queue-flag-line.visible,.queue-flag-dot.visible { display:block; }
+.queue-flag-text { z-index:11; width:235px; padding:10px 12px; box-sizing:border-box; color:#fff; font:400 15px/1.3 Inter,"Segoe UI",sans-serif; text-shadow:0 2px 3px rgba(0,0,0,.65); background:rgba(255,255,255,.12); border-radius:3px; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+.queue-flag-text strong { font-weight:700; }
+.queue-flag-line { height:2px; transform-origin:0 50%; background:#d7ffcd; }
+.queue-flag-dot { width:9px; height:9px; margin:-4px 0 0 -4px; border-radius:50%; background:#d7ffcd; }
 
 .sun-dial {
   position: absolute;
@@ -275,13 +323,16 @@ select {
   position: fixed;
   z-index: 20;
   display: none;
-  min-width: 28px;
+  width: 166px;
+  min-width: 166px;
+  box-sizing: border-box;
   padding: 5px 8px;
   border-radius: 5px;
   background: #5f43b5;
   color: #ffffff;
   font: 700 14px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
   text-align: center;
+  white-space: nowrap;
   pointer-events: none;
   transform: translate(-50%, -100%);
 }
