@@ -16,9 +16,26 @@ import { createCarousel } from "../models/carousel.js";
 import { createSandbox } from "../models/sandbox.js";
 import { createClimbingFrame } from "../models/climbingFrame.js";
 import { createSwings } from "../models/swings.js";
-import planUrl from "../генплан для Codex.svg?url";
+const planUrl = "./генплан для Codex.svg?rev=20260827-forest";
 
 const host = document.querySelector("#scene");
+const DEVELOPER_TOOLS_COMMAND = "покажи инструменты разработчика";
+const HIDE_DEVELOPER_TOOLS_COMMAND = "спрячь инструменты разработчика";
+let developerCommandBuffer = "";
+const showDeveloperTools = () => {
+  document.body.classList.add("developer-tools-visible");
+};
+const hideDeveloperTools = () => {
+  document.body.classList.remove("developer-tools-visible");
+};
+window.showDeveloperTools = showDeveloperTools;
+window.hideDeveloperTools = hideDeveloperTools;
+window.addEventListener("keydown", (event) => {
+  if (event.key.length !== 1) return;
+  developerCommandBuffer = `${developerCommandBuffer}${event.key.toLowerCase()}`.slice(-Math.max(DEVELOPER_TOOLS_COMMAND.length, HIDE_DEVELOPER_TOOLS_COMMAND.length));
+  if (developerCommandBuffer === DEVELOPER_TOOLS_COMMAND) showDeveloperTools();
+  if (developerCommandBuffer === HIDE_DEVELOPER_TOOLS_COMMAND) hideDeveloperTools();
+});
 import { firstQueuePlots } from "./firstQueuePlots.js";
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -95,6 +112,64 @@ sky.material.uniforms.mieCoefficient.value = 0.006;
 sky.material.uniforms.mieDirectionalG.value = 0.82;
 sky.material.uniforms.sunPosition.value.copy(sun.position).normalize();
 sky.visible = false;
+
+function createNightSkyTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#071326";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createNightStars() {
+  const positions = [];
+  const colors = [];
+  let seed = 28101996;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const starColors = [new THREE.Color(0xffd9a3), new THREE.Color(0xfff4d6), new THREE.Color(0xd9e8ff), new THREE.Color(0xaecbff)];
+  for (let index = 0; index < 850; index += 1) {
+    const theta = random() * Math.PI * 2;
+    const phi = random() * Math.PI / 2;
+    const radius = 300;
+    positions.push(
+      radius * Math.sin(phi) * Math.cos(theta),
+      radius * Math.cos(phi),
+      radius * Math.sin(phi) * Math.sin(theta),
+    );
+    const color = starColors[Math.floor(random() * starColors.length)];
+    colors.push(color.r, color.g, color.b);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  const stars = new THREE.Points(geometry, new THREE.PointsMaterial({ size: 2.6, vertexColors: true, transparent: true, opacity: 0.9, sizeAttenuation: false, depthWrite: false, depthTest: false, fog: false, blending: THREE.AdditiveBlending }));
+  stars.frustumCulled = false;
+  stars.renderOrder = -999;
+  return stars;
+}
+
+const nightSky = new THREE.Mesh(
+  new THREE.SphereGeometry(430, 32, 16),
+  new THREE.MeshBasicMaterial({ map: createNightSkyTexture(), side: THREE.BackSide, transparent: false, opacity: 1, depthWrite: false, depthTest: false, fog: false }),
+);
+const nightStars = createNightStars();
+nightSky.frustumCulled = false;
+nightSky.renderOrder = -1000;
+scene.add(nightSky);
+scene.add(nightStars);
+// Start in the same night state as the initial sun position.
+scene.background = nightSky.material.map;
+nightSky.visible = false;
+nightStars.visible = false;
 
 function createCloudTexture() {
   const canvas = document.createElement("canvas");
@@ -229,6 +304,13 @@ function setSunPhase(phase) {
     }
   }
   sun.color.copy(sunColor);
+  const nightAmount = THREE.MathUtils.smoothstep(1 - daylightCurve, 0.08, 0.72);
+  const skyColor = new THREE.Color(0xc9dce1).lerp(new THREE.Color(0x071326), nightAmount);
+  scene.background = skyColor;
+  scene.fog.color.copy(skyColor);
+  nightSky.visible = false;
+  nightStars.visible = true;
+  nightStars.material.opacity = 0.9 * nightAmount;
   sun.intensity = daylight > 0 ? 0.35 + daylightCurve * 3.45 : 0;
   ambientLight.intensity = daylight > 0 ? 0.48 + daylightCurve * 1.62 : 0.32;
   moonLight.intensity = (1 - daylight) * 0.22;
@@ -358,8 +440,8 @@ horizonTrunk.visible = false;
 horizonCrown.visible = false;
 const SVG_W = 10144;
 const SVG_H = 3831;
-const SOURCE_SVG_W = 37881;
-const SOURCE_SVG_H = 11854;
+const SOURCE_SVG_W = 19911;
+const SOURCE_SVG_H = 19964;
 const WORLD_W = 160;
 const SCALE = WORLD_W / SVG_W;
 const SVG_OFFSET_X = 4961;
@@ -1822,6 +1904,7 @@ window.addEventListener("resize", () => {
 function animate() {
   controls.update();
   if (!sunDragging) setSunPhase(sunPhase - 0.0007);
+  nightSky.position.copy(camera.position);
   map.updateMatrixWorld(true);
   updateFirstQueuePointer();
   updateExtraQueueFlags();
