@@ -2,9 +2,6 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { SVGLoader } from "three/addons/loaders/SVGLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
-import { createPine1 } from "../models/pine1.js";
-import { createPine2 } from "../models/pine2.js";
-import { createPine3 } from "../models/pine3.js";
 import { createCar1 } from "../models/car1.js";
 import { createCar2 } from "../models/car2.js";
 import { createCar3 } from "../models/car3.js";
@@ -16,6 +13,7 @@ import { createCarousel } from "../models/carousel.js";
 import { createSandbox } from "../models/sandbox.js";
 import { createClimbingFrame } from "../models/climbingFrame.js";
 import { createSwings } from "../models/swings.js";
+import { houseShadows as cachedHouseShadows } from "../models/shadows.js";
 const planUrl = "./генплан для Codex.svg?rev=20260827-forest";
 
 const host = document.querySelector("#scene");
@@ -38,7 +36,7 @@ window.addEventListener("keydown", (event) => {
 });
 import { firstQueuePlots } from "./firstQueuePlots.js";
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(host.clientWidth, host.clientHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -93,7 +91,7 @@ sun.position.set(-45, 80, 45);
 sun.castShadow = true;
 sun.target.position.set(-13, 0, -1);
 scene.add(sun.target);
-sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -100;
 sun.shadow.camera.right = 100;
 sun.shadow.camera.top = 100;
@@ -338,6 +336,7 @@ scene.add(map);
 const houseShadows = [];
 const houseLights = [];
 const houseGlows = [];
+let createHouseModel = null;
 const poleLights = [];
 const entranceLights = [];
 const entranceGlows = [];
@@ -468,6 +467,8 @@ const layers = {
   "#D3D7DE": { name: "Обочина", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT * 0.8, color: 0xd3d7de },
   "#9AA0A3": { name: "Дороги поселка", elevation: HEIGHT_UNIT * 2, height: HEIGHT_UNIT, color: 0x9aa0a3 },
   "#59A37E": { name: "Лес", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT, color: 0x59a37e },
+  "#509874": { name: "Лес", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT, color: 0x509874 },
+  "#498F6C": { name: "Лес", elevation: HEIGHT_UNIT, height: HEIGHT_UNIT, color: 0x498f6c },
   "#B4ED92": { name: "Посадка", elevation: 0, height: 0, color: 0xb4ed92, hidden: true },
   "#EAE3CA": { name: "Общественные места", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xeae3ca },
   "#A4C1E3": { name: "Электрическая подстанция", elevation: HEIGHT_UNIT * 3, height: HEIGHT_UNIT, color: 0xa4c1e3, isSubstation: true },
@@ -476,6 +477,10 @@ const layers = {
 layers["#9AA0A3"].elevation = 0.085;
 layers["#B7DAD2"].elevation = 0.07;
 const forestPolygons = [];
+const forestPolygonBounds = [];
+const forestExpandedBounds = [];
+const forestZonePolygons = { "#59A37E": [], "#509874": [], "#498F6C": [] };
+const forestZoneBounds = { "#59A37E": [], "#509874": [], "#498F6C": [] };
 const treeTrunk = new THREE.MeshStandardMaterial({ color: 0x75583d, roughness: 0.9, depthTest: false, depthWrite: false });
 const treeCrowns = [
   new THREE.MeshStandardMaterial({ color: 0x256b43, roughness: 0.92 }),
@@ -509,7 +514,12 @@ regularTreeInstances.trunk.renderOrder = 20;
 tallFirInstances.trunk.renderOrder = 20;
 
 function fillOf(path) {
-  return (path.userData?.style?.fill || "").toUpperCase();
+  const value = String(path.userData?.style?.fill || "").trim().toUpperCase();
+  const rgb = value.match(/^RGB\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+  const rgbPercent = value.match(/^RGB\(\s*(\d+(?:\.\d+)?)%\s*,\s*(\d+(?:\.\d+)?)%\s*,\s*(\d+(?:\.\d+)?)%\s*\)$/);
+  if (rgb) return `#${rgb.slice(1).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+  if (rgbPercent) return `#${rgbPercent.slice(1).map((channel) => Math.round(Number(channel) * 2.55).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+  return value;
 }
 
 function isHouse(path) {
@@ -640,8 +650,19 @@ function addTerritory(path, definition) {
     }
     if (definition.isSubstation) addSubstation(shape, definition.elevation + definition.height);
   });
-    if (definition.color === 0x59a37e) {
-    shapes.forEach((shape) => forestPolygons.push(shape.extractPoints(8).shape));
+  if ([0x59a37e, 0x509874, 0x498f6c].includes(definition.color)) {
+    shapes.forEach((shape) => {
+      const polygon = shape.extractPoints(8).shape;
+      forestPolygons.push(polygon);
+      const zoneKey = Object.keys(forestZonePolygons).find((key) => layers[key]?.color === definition.color);
+      if (zoneKey) {
+        forestZonePolygons[zoneKey].push(polygon);
+        forestZoneBounds[zoneKey].push(polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2()));
+      }
+      const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+      forestPolygonBounds.push(bounds);
+      forestExpandedBounds.push(bounds.clone().expandByScalar(Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y) * 0.1));
+    });
   }
 }
 
@@ -1142,14 +1163,6 @@ function seedPlaygroundEquipment() {
 }
 
 function addHouse(spec) {
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xf8f8f2, roughness: 0.78 });
-  const roofMaterial = bodyMaterial.clone();
-  bodyMaterial.emissive.set(0xffb56b);
-  roofMaterial.emissive.set(0xffb56b);
-  bodyMaterial.emissiveIntensity = 0;
-  roofMaterial.emissiveIntensity = 0;
-  roofMaterial.flatShading = true;
-  roofMaterial.needsUpdate = true;
   const radians = THREE.MathUtils.degToRad(spec.rotation);
   const localCenter = new THREE.Vector2(spec.width / 2, spec.height / 2);
   const rotatedCenter = localCenter.rotateAround(new THREE.Vector2(), radians);
@@ -1163,34 +1176,15 @@ function addHouse(spec) {
     group.rotation.y = Math.PI - radians;
 
     const bodyHeight = 0.65;
-    const body = new THREE.Mesh(new THREE.BoxGeometry(width, bodyHeight, depth), bodyMaterial);
-    body.position.y = bodyHeight / 2;
-    body.castShadow = true;
-    body.receiveShadow = true;
-
     const roofHeight = 0.4;
-    const roofBase = bodyHeight;
-    const roof = new THREE.Mesh(new THREE.BufferGeometry(), roofMaterial);
-    roof.geometry.setAttribute("position", new THREE.Float32BufferAttribute([
-      -width / 2, roofBase, -depth / 2, width / 2, roofBase, -depth / 2, width / 2, roofBase, depth / 2, -width / 2, roofBase, depth / 2,
-      -width / 2, roofBase + roofHeight, 0, width / 2, roofBase + roofHeight, 0,
-    ], 3));
-    roof.geometry.setIndex([
-      0, 5, 1, 0, 4, 5,
-      3, 5, 4, 3, 2, 5,
-      0, 3, 4,
-      1, 5, 2,
-    ]);
-    roof.geometry.computeVertexNormals();
-    roof.castShadow = true;
-    roof.receiveShadow = true;
-    group.add(body, roof);
+    const house = createHouseModel(width, depth);
+    group.add(house);
     const light = new THREE.PointLight(0xffb56b, 0, 4.5, 2);
     light.position.set(0, 0.7, 0);
     light.castShadow = false;
     group.add(light);
     map.add(group);
-    houseLights.push({ light, materials: [bodyMaterial, roofMaterial] });
+    houseLights.push({ light, materials: [house.material] });
     const glow = new THREE.Mesh(new THREE.CircleGeometry(1, 16), houseGlowMaterial);
     glow.rotation.x = -Math.PI / 2;
     glow.position.set(center.x, layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.012, center.y);
@@ -1203,7 +1197,24 @@ function addHouse(spec) {
     shadow.rotation.x = 0;
     shadow.renderOrder = 20;
     map.add(shadow);
-    houseShadows.push({ group, width, depth, bodyHeight, roofHeight, shadow });
+    const shadowIndex = houseShadows.length;
+    if (cachedHouseShadows[shadowIndex]) setCachedHouseShadow(shadow, cachedHouseShadows[shadowIndex]);
+    houseShadows.push({ group, width, depth, bodyHeight, roofHeight, shadow, shadowIndex });
+}
+
+function setCachedHouseShadow(shadow, points) {
+  const positions = new Float32Array(points.length * 3);
+  points.forEach(([x, z], index) => {
+    positions[index * 3] = x;
+    positions[index * 3 + 1] = 0.184;
+    positions[index * 3 + 2] = z;
+  });
+  shadow.geometry.dispose();
+  shadow.geometry = new THREE.BufferGeometry();
+  shadow.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  shadow.geometry.setIndex(points.slice(1, -1).flatMap((_, index) => [0, index + 1, index + 2]));
+  shadow.geometry.computeVertexNormals();
+  shadow.geometry.computeBoundingSphere();
 }
 
 function convexHull(points) {
@@ -1222,10 +1233,12 @@ function updateHouseShadows() {
   const surfaceOffset = Math.max(0.004, cameraDistance * 0.00018);
   const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + surfaceOffset;
   const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
-  houseShadows.forEach(({ group, width, depth, bodyHeight, roofHeight, shadow }) => {
+  const standardSun = sun.position.distanceTo(new THREE.Vector3(-45, 80, 45)) < 0.001;
+  houseShadows.forEach(({ group, width, depth, bodyHeight, roofHeight, shadow, shadowIndex }) => {
     shadow.visible = direction.y > -0.12;
     shadow.material.opacity = 0.39 * THREE.MathUtils.smoothstep(daylightLevel, 0, 1);
     if (!shadow.visible) return;
+    if (standardSun && cachedHouseShadows[shadowIndex]) return;
     const local = [
       [-width / 2, 0, -depth / 2], [width / 2, 0, -depth / 2], [width / 2, 0, depth / 2], [-width / 2, 0, depth / 2],
       [-width / 2, bodyHeight, -depth / 2], [width / 2, bodyHeight, -depth / 2], [width / 2, bodyHeight, depth / 2], [-width / 2, bodyHeight, depth / 2],
@@ -1403,7 +1416,30 @@ function isInsidePolygon(point, polygon) {
 }
 
 function pointInAnyForest(point) {
-  return forestPolygons.some((polygon) => isInsidePolygon(point, polygon));
+  return forestPolygons.some((polygon, index) => forestPolygonBounds[index].containsPoint(point) && isInsidePolygon(point, polygon));
+}
+
+function registerForestZones(paths) {
+  forestPolygons.length = 0;
+  forestPolygonBounds.length = 0;
+  forestExpandedBounds.length = 0;
+  Object.keys(forestZonePolygons).forEach((key) => {
+    forestZonePolygons[key].length = 0;
+    forestZoneBounds[key].length = 0;
+  });
+  paths.forEach((path) => {
+    const fill = fillOf(path);
+    if (!forestZonePolygons[fill]) return;
+    SVGLoader.createShapes(path).forEach((polygonShape) => {
+      const polygon = polygonShape.extractPoints(8).shape;
+      const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+      forestPolygons.push(polygon);
+      forestPolygonBounds.push(bounds);
+      forestExpandedBounds.push(bounds.clone().expandByScalar(Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y) * 0.1));
+      forestZonePolygons[fill].push(polygon);
+      forestZoneBounds[fill].push(bounds);
+    });
+  });
 }
 
 function seedLightPoles(lightPolePaths, guidePaths = []) {
@@ -1494,7 +1530,173 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
   });
 }
 
-function seedPines() {
+const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+async function seedPines() {
+  const [pineModules, simpleModules, superModules] = await Promise.all([
+    Promise.all([
+      import("../models/pine1.js"),
+      import("../models/pine2.js"),
+      import("../models/pine3.js"),
+    ]),
+    Promise.all([
+      import("../models/simplePine1.js"),
+      import("../models/simplePine2.js"),
+      import("../models/simplePine3.js"),
+    ]),
+    Promise.all([
+      import("../models/SupersimplePine1.js"),
+      import("../models/SupersimplePine2.js"),
+      import("../models/SupersimplePine3.js"),
+    ]),
+  ]);
+  const templates = pineModules.map((module) => Object.values(module)[0]());
+  const batches = templates.map((template) => template.children.map((part, partIndex) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, partIndex === 0 ? forestSharedTrunkMaterial : forestSharedCrownMaterial, 1100);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = false;
+    return mesh;
+  }));
+  const trees = new THREE.Group();
+  batches.flat().forEach((batch) => trees.add(batch));
+  const polygons = forestZonePolygons["#59A37E"];
+  const bounds = forestZoneBounds["#59A37E"];
+  if (!polygons.length) return;
+  const counts = [0, 0, 0];
+  const matrix = new THREE.Matrix4();
+  const baseY = layers["#59A37E"].elevation + layers["#59A37E"].height;
+  const random = (() => { let value = 14051996; return () => ((value = (value * 1664525 + 1013904223) >>> 0) / 4294967296); })();
+  let index = 0;
+  let attempts = 0;
+  while (index < 1100 && attempts < 200000) {
+    attempts += 1;
+    if (attempts % 2000 === 0) await yieldToBrowser();
+    const polygonIndex = attempts % polygons.length;
+    const polygon = polygons[polygonIndex];
+    const box = bounds[polygonIndex];
+    const source = new THREE.Vector2(
+      THREE.MathUtils.lerp(box.min.x, box.max.x, random()),
+      THREE.MathUtils.lerp(box.min.y, box.max.y, random()),
+    );
+    if (!isInsidePolygon(source, polygon)) continue;
+    const point = worldPoint(source);
+    const type = index % templates.length;
+    const instance = counts[type]++;
+    const scale = 0.55 + random() * 0.65;
+    const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI * 2);
+    templates[type].children.forEach((part, partIndex) => {
+      matrix.compose(new THREE.Vector3(point.x, baseY + part.position.y * scale, point.y), rotation, new THREE.Vector3(scale, scale, scale));
+      batches[type][partIndex].setMatrixAt(instance, matrix);
+    });
+    index += 1;
+  }
+  batches.forEach((parts, type) => parts.forEach((mesh) => {
+    mesh.count = counts[type];
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }));
+  map.add(trees);
+  const simpleTemplates = simpleModules.map((module) => Object.values(module)[0]());
+  const simpleBatches = simpleTemplates.map((template) => template.children.map((part, partIndex) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, partIndex === 0 ? forestSharedTrunkMaterial : forestSharedCrownMaterial, 3000);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = false;
+    return mesh;
+  }));
+  const simpleTrees = new THREE.Group();
+  simpleBatches.flat().forEach((batch) => simpleTrees.add(batch));
+  const simplePolygons = forestZonePolygons["#509874"];
+  const simpleBounds = forestZoneBounds["#509874"];
+  const simpleCounts = [0, 0, 0];
+  if (simplePolygons.length) {
+    const polygonAreas = simplePolygons.map((polygon) => Math.abs(polygon.reduce((area, point, pointIndex) => {
+      const next = polygon[(pointIndex + 1) % polygon.length];
+      return area + point.x * next.y - next.x * point.y;
+    }, 0)) * 0.5);
+    const totalArea = polygonAreas.reduce((sum, area) => sum + area, 0);
+    for (let index = 0; index < 3000; index += 1) {
+      if (index > 0 && index % 250 === 0) await yieldToBrowser();
+      let areaCursor = random() * totalArea;
+      let polygonIndex = 0;
+      while (polygonIndex < polygonAreas.length - 1 && areaCursor > polygonAreas[polygonIndex]) {
+        areaCursor -= polygonAreas[polygonIndex];
+        polygonIndex += 1;
+      }
+      const polygon = simplePolygons[polygonIndex];
+      const box = simpleBounds[polygonIndex];
+      let source = new THREE.Vector2(
+        THREE.MathUtils.lerp(box.min.x, box.max.x, random()),
+        THREE.MathUtils.lerp(box.min.y, box.max.y, random()),
+      );
+      if (!isInsidePolygon(source, polygon)) {
+        const center = polygon.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / polygon.length);
+        source = center;
+      }
+      const point = worldPoint(source);
+      const type = Math.floor(random() * simpleTemplates.length);
+      const instance = simpleCounts[type]++;
+      const scale = 0.55 + random() * 0.65;
+      const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI * 2);
+      simpleTemplates[type].children.forEach((part, partIndex) => {
+        matrix.compose(new THREE.Vector3(point.x, baseY + part.position.y * scale, point.y), rotation, new THREE.Vector3(scale, scale, scale));
+        simpleBatches[type][partIndex].setMatrixAt(instance, matrix);
+      });
+    }
+    simpleBatches.forEach((parts, type) => parts.forEach((mesh) => {
+      mesh.count = simpleCounts[type];
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+    }));
+    map.add(simpleTrees);
+  }
+  const superTemplates = superModules.map((module) => Object.values(module)[0]());
+  const superBatches = superTemplates.map((template) => template.children.map((part, partIndex) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, partIndex === 0 ? forestSharedTrunkMaterial : forestSharedCrownMaterial, 4500);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = false;
+    return mesh;
+  }));
+  const superTrees = new THREE.Group();
+  superBatches.flat().forEach((batch) => superTrees.add(batch));
+  const superPolygons = forestZonePolygons["#498F6C"];
+  const superBounds = forestZoneBounds["#498F6C"];
+  if (superPolygons.length) {
+    const areas = superPolygons.map((polygon) => Math.abs(polygon.reduce((area, point, pointIndex) => {
+      const next = polygon[(pointIndex + 1) % polygon.length];
+      return area + point.x * next.y - next.x * point.y;
+    }, 0)) * 0.5);
+    const totalArea = areas.reduce((sum, area) => sum + area, 0);
+    const superCounts = [0, 0, 0];
+    for (let index = 0; index < 4500; index += 1) {
+      if (index > 0 && index % 250 === 0) await yieldToBrowser();
+      let cursor = random() * totalArea;
+      let polygonIndex = 0;
+      while (polygonIndex < areas.length - 1 && cursor > areas[polygonIndex]) {
+        cursor -= areas[polygonIndex];
+        polygonIndex += 1;
+      }
+      const polygon = superPolygons[polygonIndex];
+      const box = superBounds[polygonIndex];
+      const source = new THREE.Vector2(THREE.MathUtils.lerp(box.min.x, box.max.x, random()), THREE.MathUtils.lerp(box.min.y, box.max.y, random()));
+      const point = worldPoint(isInsidePolygon(source, polygon) ? source : polygon[0]);
+      const type = Math.floor(random() * superTemplates.length);
+      const instance = superCounts[type]++;
+      const scale = 0.55 + random() * 0.65;
+      const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI * 2);
+      superTemplates[type].children.forEach((part, partIndex) => {
+        matrix.compose(new THREE.Vector3(point.x, baseY + part.position.y * scale, point.y), rotation, new THREE.Vector3(scale, scale, scale));
+        superBatches[type][partIndex].setMatrixAt(instance, matrix);
+      });
+    }
+    superBatches.forEach((parts, type) => parts.forEach((mesh) => { mesh.count = superCounts[type]; mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }));
+    map.add(superTrees);
+  }
+  return;
+
+  {
   const random = (() => {
     let value = 14051996;
     return () => {
@@ -1508,27 +1710,47 @@ function seedPines() {
     { radius: 0.86, height: 2.875 },
     { radius: 0.62, height: 1.975 },
   ];
-  const pineCapacity = 6300;
-  const templates = pineFactories.map((factory) => factory());
-  const pineBatches = templates.map((template) => template.children.map((part) => {
-    const mesh = new THREE.InstancedMesh(part.geometry, part.material, pineCapacity);
+  const lowPolyTemplate = new THREE.Group();
+  lowPolyTemplate.add(
+    Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 1.1, 3), treeTrunk), { position: new THREE.Vector3(0, 0.55, 0) }),
+    Object.assign(new THREE.Mesh(new THREE.ConeGeometry(0.72, 2.5, 4), treeCrowns[0]), { position: new THREE.Vector3(0, 1.8, 0) }),
+  );
+  const ultraLowPolyTemplate = new THREE.Group();
+  ultraLowPolyTemplate.add(
+    Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 1.1, 3), treeTrunk), { position: new THREE.Vector3(0, 0.55, 0) }),
+    Object.assign(new THREE.Mesh(new THREE.ConeGeometry(0.72, 2.5, 3), treeCrowns[1]), { position: new THREE.Vector3(0, 1.8, 0) }),
+  );
+  const templates = [pineFactories.map((factory) => factory())];
+  const capacities = [2000];
+  const pineBatches = templates.map((zoneTemplates, zoneIndex) => zoneTemplates.flatMap((template) => template.children.map((part) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, part.material, capacities[zoneIndex]);
     mesh.castShadow = false;
     mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
     return mesh;
-  }));
+  })));
   const pines = new THREE.Group();
+  pines.visible = true;
   pineBatches.flat().forEach((batch) => pines.add(batch));
-  const counts = [0, 0, 0];
+  const counts = [0];
   const matrix = new THREE.Matrix4();
   const forestBaseY = layers["#59A37E"].elevation + layers["#59A37E"].height;
   let added = 0;
-  for (let attempt = 0; attempt < 1350000 && added < 6300; attempt += 1) {
-    const source = new THREE.Vector2(random() * SOURCE_SVG_W, random() * SOURCE_SVG_H);
-    if (!pointInAnyForest(source)) continue;
+  const zoneKeys = ["#59A37E"];
+  const zonePolygons = forestZonePolygons[zoneKeys[0]];
+  const zoneBounds = forestZoneBounds[zoneKeys[0]];
+  if (!zonePolygons.length) return;
+  for (let attempt = 0; counts[0] < capacities[0]; attempt += 1) {
+    if (attempt > 0 && attempt % 250 === 0) await yieldToBrowser();
+    const polygon = zonePolygons[attempt % zonePolygons.length];
+    const center = polygon.reduce((sum, vertex) => sum.add(vertex), new THREE.Vector2()).multiplyScalar(1 / polygon.length);
+    const vertex = polygon[Math.floor(random() * polygon.length)];
+    const source = center.clone().lerp(vertex, 0.35 + random() * 0.6);
+    const zoneIndex = 0;
     const point = worldPoint(source);
     const type = Math.floor(random() * pineFactories.length);
-    const pine = templates[type];
-    const instance = counts[type];
+    const pine = templates[zoneIndex][type];
+    const instance = counts[zoneIndex];
     const scale = 0.55 + random() * 0.65;
     forestShadowRecords.push({ position: new THREE.Vector3(point.x, forestBaseY, point.y), scale, ...pineProfiles[type] });
     const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI * 2);
@@ -1538,15 +1760,18 @@ function seedPines() {
         rotation,
         new THREE.Vector3(scale, scale, scale),
       );
-      pineBatches[type][partIndex].setMatrixAt(instance, matrix);
+      const batchOffset = zoneIndex === 0
+        ? templates[0].slice(0, type).reduce((sum, template) => sum + template.children.length, 0)
+        : 0;
+      pineBatches[zoneIndex][batchOffset + partIndex].setMatrixAt(instance, matrix);
     });
-    counts[type] += 1;
+    counts[zoneIndex] += 1;
     added += 1;
   }
-  pineBatches.forEach((batches, type) => batches.forEach((batch) => {
+  pineBatches.forEach((batches, zoneIndex) => batches.forEach((batch) => {
       batch.castShadow = false;
     batch.receiveShadow = true;
-    batch.count = counts[type];
+    batch.count = counts[zoneIndex];
     batch.instanceMatrix.needsUpdate = true;
     batch.computeBoundingSphere();
   }));
@@ -1559,8 +1784,11 @@ function seedPines() {
   });
 }
 
+}
+
 function pointInExpandedForest(point) {
-  return forestPolygons.some((polygon) => {
+  return forestPolygons.some((polygon, index) => {
+    if (!forestExpandedBounds[index].containsPoint(point)) return false;
     const center = polygon.reduce((sum, vertex) => sum.add(vertex), new THREE.Vector2()).multiplyScalar(1 / polygon.length);
     const expandedPoint = center.clone().add(point.clone().sub(center).multiplyScalar(1 / 1.2));
     return isInsidePolygon(expandedPoint, polygon) && !isInsidePolygon(point, polygon);
@@ -1602,7 +1830,6 @@ function addTree(x, z, scale) {
   const set = (mesh, y) => {
     instanceMatrix.compose(new THREE.Vector3(x, baseY + y * scale, z), new THREE.Quaternion(), new THREE.Vector3(scale, scale, scale));
     mesh.setMatrixAt(index, instanceMatrix);
-    mesh.instanceMatrix.needsUpdate = true;
   };
   set(regularTreeInstances.trunk, 0.53);
   set(regularTreeInstances.lower, 2.05);
@@ -1637,7 +1864,7 @@ function seedTrees() {
   })();
   let firsAdded = 0;
   let tallFirsAdded = 0;
-  for (let attempt = 0; attempt < 360000 && (firsAdded < 7200 || tallFirsAdded < 3600); attempt += 1) {
+  for (let attempt = 0; attempt < 360000 && (firsAdded < 7200 || tallFirsAdded < 500); attempt += 1) {
     const source = new THREE.Vector2(random() * SOURCE_SVG_W, random() * SOURCE_SVG_H);
     if (!pointInAnyForest(source)) continue;
     const point = worldPoint(source);
@@ -1651,6 +1878,9 @@ function seedTrees() {
   }
   Object.values(regularTreeInstances).forEach((mesh) => { mesh.count = firsAdded; });
   Object.values(tallFirInstances).forEach((mesh) => { mesh.count = tallFirsAdded; });
+  Object.values({ ...regularTreeInstances, ...tallFirInstances }).forEach((mesh) => {
+    mesh.instanceMatrix.needsUpdate = true;
+  });
   Object.values(regularTreeInstances).forEach((mesh) => mesh.computeBoundingSphere());
   Object.values(tallFirInstances).forEach((mesh) => mesh.computeBoundingSphere());
 }
@@ -1684,14 +1914,25 @@ async function buildModel() {
     const fill = String(style.fill || "").replace(/^#/, "").toUpperCase();
     return stroke === "04FE9A" || fill === "04FE9A";
   });
-  parsed.paths.forEach((path) => {
+  for (let index = 0; index < parsed.paths.length; index += 1) {
+    if (index > 0 && index % 20 === 0) await yieldToBrowser();
+    const path = parsed.paths[index];
     const fill = fillOf(path);
     if (layers[fill]) addTerritory(path, layers[fill]);
-  });
-  readHouses(svgText).forEach(addHouse);
-  seedPines();
-  addPlantingPines(plantingPaths);
+  }
+  registerForestZones(parsed.paths);
+  const houses = readHouses(svgText);
+  const houseModule = await import("../models/house.js");
+  createHouseModel = houseModule.createHouse;
+  if (typeof createHouseModel !== "function") throw new Error("House model factory is unavailable");
+  for (let index = 0; index < houses.length; index += 1) {
+    if (index > 0 && index % 10 === 0) await yieldToBrowser();
+    addHouse(houses[index]);
+  }
+  // Build lamp posts before the deferred forest generation so they are visible immediately.
   seedLightPoles(lightPolePaths, guidePaths);
+  await seedPines();
+  addPlantingPines(plantingPaths);
   map.updateMatrixWorld(true);
   updateFirstQueuePointer();
   updateHouseShadows();
@@ -1812,6 +2053,8 @@ const extraQueueFlags = [
   { button: document.querySelector("#second-queue"), outline: secondQueueOutline, digit: "2", text: "<strong>очередь строительства</strong><br>отдельный въезд<br>39 домовладений<br>590 м.п. дорог<br>детская площадка" },
   { button: document.querySelector("#third-queue"), outline: thirdQueueOutline, digit: "3", text: "<strong>очередь строительства</strong><br>отдельный въезд<br>31 домовладение<br>410 м.п. дорог<br>спортивная площадка" },
 ];
+const forestSharedTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x75583d, roughness: 0.9 });
+const forestSharedCrownMaterial = new THREE.MeshStandardMaterial({ color: 0x347a46, roughness: 0.92 });
 extraQueueFlags.forEach((item) => {
   item.flag = document.createElement("img"); item.flag.className = `queue-flag queue-flag-${item.digit}`; item.flag.src = `./${item.digit}.svg?rev=1`; item.flag.alt = "";
   item.textNode = document.createElement("div"); item.textNode.className = "queue-flag-text"; item.textNode.innerHTML = item.text;
