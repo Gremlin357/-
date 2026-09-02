@@ -1,13 +1,15 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
-const houseMaterial = new THREE.MeshStandardMaterial({
+export const houseOffMaterial = new THREE.MeshStandardMaterial({
   color: 0xf8f8f2,
   roughness: 0.78,
   emissive: 0xffb56b,
   emissiveIntensity: 0,
   side: THREE.DoubleSide,
 });
+
+export const houseOnMaterial = houseOffMaterial.clone();
 
 const bodyGeometry = new THREE.BoxGeometry(1, 0.65, 1).toNonIndexed();
 bodyGeometry.deleteAttribute("uv");
@@ -34,7 +36,7 @@ bodyGeometry.dispose();
 roofGeometry.dispose();
 
 export function createHouse(width, depth) {
-  const mesh = new THREE.Mesh(houseGeometry, houseMaterial);
+  const mesh = new THREE.Mesh(houseGeometry, houseOffMaterial);
   mesh.scale.set(width, 1, depth);
   mesh.castShadow = true;
   mesh.receiveShadow = true;

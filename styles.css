@@ -213,10 +213,12 @@ select {
 }
 .camera-readout,
 .sun-dial,
-.axis-label { display: none !important; }
+.axis-label,
+.pole-label { display: none !important; }
 body.developer-tools-visible .camera-readout,
 body.developer-tools-visible .sun-dial,
-body.developer-tools-visible .axis-label { display: block !important; }
+body.developer-tools-visible .axis-label,
+body.developer-tools-visible .pole-label { display: block !important; }
 
 .logo-controls { position: absolute; top: 116px; left: 24px; z-index: 5; display: flex; flex-direction: column; gap: 6px; }
 .logo-controls .queue-button {
@@ -362,6 +364,16 @@ body.developer-tools-visible .axis-label { display: block !important; }
   white-space: nowrap;
   text-align: center;
   transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.pole-label {
+  position: absolute;
+  z-index: 12;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font: 700 12px/1 Arial, sans-serif;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
   pointer-events: none;
 }
 .axis-label {

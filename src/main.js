@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { SVGLoader } from "three/addons/loaders/SVGLoader.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { createCar1 } from "../models/car1.js";
 import { createCar2 } from "../models/car2.js";
@@ -14,8 +15,8 @@ import { createSandbox } from "../models/sandbox.js";
 import { createClimbingFrame } from "../models/climbingFrame.js";
 import { createSwings } from "../models/swings.js";
 import { houseShadows as cachedHouseShadows } from "../models/shadows.js";
-const planUrl = "./генплан для Codex.svg?rev=20260827-forest";
-
+import { houseLocations } from "./houseLocations.js";
+import { sceneData } from "./sceneData.js";
 const host = document.querySelector("#scene");
 const DEVELOPER_TOOLS_COMMAND = "покажи инструменты разработчика";
 const HIDE_DEVELOPER_TOOLS_COMMAND = "спрячь инструменты разработчика";
@@ -52,13 +53,17 @@ host.appendChild(plotLabel);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xc9dce1);
 scene.fog = new THREE.Fog(0xc9dce1, 135, 270);
+const DEFAULT_CAMERA_POSITION = new THREE.Vector3(-17, 40, -42);
+const DEFAULT_CAMERA_TARGET = new THREE.Vector3(7, -6, 7);
 const camera = new THREE.PerspectiveCamera(41, host.clientWidth / host.clientHeight, 0.1, 500);
-camera.position.set(-17, 40, -42);
+camera.position.copy(DEFAULT_CAMERA_POSITION);
 const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(DEFAULT_CAMERA_TARGET);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.48;
 controls.minDistance = 30;
 controls.maxDistance = 140;
+controls.update();
 const MIN_CAMERA_HEIGHT = 0.2;
 let settlementBounds = null;
 const clampCameraTarget = () => {
@@ -337,7 +342,10 @@ const houseShadows = [];
 const houseLights = [];
 const houseGlows = [];
 let createHouseModel = null;
+let houseOffMaterial = null;
+let houseOnMaterial = null;
 const poleLights = [];
+const poleLabels = [];
 const entranceLights = [];
 const entranceGlows = [];
 const poleGlows = [];
@@ -346,6 +354,7 @@ const entranceGateGroups = [];
 let lastDaylightLevel = daylightLevel;
 let nightScheduleActive = false;
 const plantingTrees = [];
+let plantingPineFactories = [];
 const plantingShadows = [];
 const forestShadowRecords = [];
 let forestShadowMesh = null;
@@ -365,6 +374,7 @@ glowContext.fillRect(0, 0, 128, 128);
 const glowTexture = new THREE.CanvasTexture(glowCanvas);
 glowTexture.colorSpace = THREE.SRGBColorSpace;
 const houseGlowMaterial = new THREE.MeshBasicMaterial({ map: glowTexture, transparent: true, opacity: 0, depthWrite: false, depthTest: true, toneMapped: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+const houseGlowGeometry = new THREE.CircleGeometry(1, 16);
 const headlightCanvas = document.createElement("canvas");
 headlightCanvas.width = 128;
 headlightCanvas.height = 128;
@@ -397,8 +407,6 @@ map.add(villageFence);
 const innerFence = new THREE.Group();
 map.add(innerFence);
 const gateOpeningCenters = [];
-const forestFence = new THREE.Group();
-map.add(forestFence);
 const publicMeshes = [];
 let storeZonePolygon = null;
 const movingCars = [];
@@ -413,14 +421,6 @@ const pointer = new THREE.Vector2();
 const raycaster = new THREE.Raycaster();
 const environment = new THREE.Group();
 scene.add(environment);
-const environmentGround = new THREE.Mesh(
-  new THREE.PlaneGeometry(2000, 1600),
-  new THREE.MeshStandardMaterial({ color: 0xc2df78, roughness: 1 }),
-);
-environmentGround.rotation.x = -Math.PI / 2;
-environmentGround.position.y = -0.08;
-environmentGround.receiveShadow = true;
-environment.add(environmentGround);
 
 const horizonTrunk = new THREE.InstancedMesh(
   new THREE.CylinderGeometry(0.14, 0.22, 2.2, 6),
@@ -457,7 +457,7 @@ const orchardMarks = [
   [10122.5, 11414.5], [10061.5, 11224.5], [10091.5, 11259.5], [10120.5, 11297.5],
   [10027.5, 11187.5], [10151.5, 11333.5], [10182.5, 11369.5], [10209.5, 11406.5],
 ].map(([x, y]) => new THREE.Vector2(x, y));
-const settlementTarget = new THREE.Vector3(7, -6, 7);
+const settlementTarget = DEFAULT_CAMERA_TARGET.clone();
 const HEIGHT_UNIT = 0.06;
 
 const layers = {
@@ -520,6 +520,78 @@ function fillOf(path) {
   if (rgb) return `#${rgb.slice(1).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
   if (rgbPercent) return `#${rgbPercent.slice(1).map((channel) => Math.round(Number(channel) * 2.55).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
   return value;
+}
+
+function sceneShapes(path) {
+  const pointSets = (path.shapes || []).filter((points) => points.length >= 3);
+  const contains = (polygon, point) => {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i += 1) {
+      const a = polygon[i];
+      const b = polygon[j];
+      const ax = Array.isArray(a) ? a[0] : a.x;
+      const ay = Array.isArray(a) ? a[1] : a.y;
+      const bx = Array.isArray(b) ? b[0] : b.x;
+      const by = Array.isArray(b) ? b[1] : b.y;
+      if ((ay > point.y) !== (by > point.y) && point.x < ((bx - ax) * (point.y - ay)) / (by - ay) + ax) inside = !inside;
+    }
+    return inside;
+  };
+  const shapes = pointSets.map((points) => {
+    const getPoint = (point) => Array.isArray(point) ? { x: point[0], y: point[1] } : point;
+    const shape = new THREE.Shape();
+    shape.moveTo(getPoint(points[0]).x, getPoint(points[0]).y);
+    points.slice(1).forEach((point) => {
+      const value = getPoint(point);
+      shape.lineTo(value.x, value.y);
+    });
+    return { shape, points };
+  });
+  const evenOdd = String(path.userData?.style?.fillRule || path.userData?.style?.fillrule || "").toLowerCase() === "evenodd";
+  if (!evenOdd || shapes.length < 2) return shapes.map(({ shape }) => shape);
+  // This road is exported as an outer boundary followed by its inner boundary.
+  // The contours touch at the left connection, so point-in-polygon nesting is
+  // unreliable there; preserve the SVG order and make the second contour a hole.
+  if (shapes.length === 2) {
+    const innerPoints = shapes[1].points.slice(0, -1);
+    const innerShape = new THREE.Shape();
+    const first = innerPoints[0];
+    const firstValue = Array.isArray(first) ? { x: first[0], y: first[1] } : first;
+    innerShape.moveTo(firstValue.x, firstValue.y);
+    innerPoints.slice(1).forEach((point) => {
+      const value = Array.isArray(point) ? { x: point[0], y: point[1] } : point;
+      innerShape.lineTo(value.x, value.y);
+    });
+    shapes[0].shape.holes.push(innerShape);
+    return [shapes[0].shape];
+  }
+  const result = [];
+  shapes.forEach((candidate, index) => {
+    const point = candidate.points[0];
+    const pointValue = Array.isArray(point) ? { x: point[0], y: point[1] } : point;
+    const container = shapes.find((other, otherIndex) => otherIndex !== index && contains(other.points, pointValue));
+    if (!container) result.push(candidate.shape);
+  });
+  shapes.forEach((candidate, index) => {
+    const point = candidate.points[0];
+    const pointValue = Array.isArray(point) ? { x: point[0], y: point[1] } : point;
+    const container = shapes.find((other, otherIndex) => otherIndex !== index && contains(other.points, pointValue));
+    if (container) container.shape.holes.push(candidate.shape);
+  });
+  return result;
+}
+
+function adaptSceneData(data) {
+  return data.paths.map((entry) => ({
+    userData: { style: entry.style },
+    shapes: entry.shapes,
+    subPaths: entry.subPaths.map((points) => ({
+      getPoints: () => points.map((point) => new THREE.Vector2(
+        Array.isArray(point) ? point[0] : point.x,
+        Array.isArray(point) ? point[1] : point.y,
+      )),
+    })),
+  }));
 }
 
 function isHouse(path) {
@@ -598,7 +670,7 @@ function addPlotOutline(shape, elevation) {
 function addTerritory(path, definition) {
   if (definition.hidden) {
     const receiverMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
-    SVGLoader.createShapes(path).forEach((shape) => {
+    sceneShapes(path).forEach((shape) => {
       const receiver = flatTexturedShape(shape, receiverMaterial);
       receiver.position.y = definition.elevation;
       receiver.receiveShadow = true;
@@ -618,7 +690,7 @@ function addTerritory(path, definition) {
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
-  const shapes = SVGLoader.createShapes(path);
+  const shapes = sceneShapes(path);
   shapes.forEach((shape) => {
     const mesh = flatTexturedShape(shape, material);
     mesh.position.y = definition.elevation;
@@ -666,43 +738,78 @@ function addTerritory(path, definition) {
   }
 }
 
-function addPlantingPines(paths) {
-  const factories = [createPine1, createPine2, createPine3];
+function addPlantingPines(paths, markerPaths = []) {
+  const factories = plantingPineFactories;
+  if (factories.length !== 3) return;
   const profiles = [
     { radius: 0.72, height: 3.05 },
     { radius: 0.86, height: 2.875 },
     { radius: 0.62, height: 1.975 },
   ];
   let planted = 0;
+  const markers = markerPaths.flatMap((path) => sceneShapes(path).map((shape) => {
+    const points = shape.extractPoints(8).shape;
+    return points.reduce((center, point) => center.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
+  }));
   paths.forEach((path) => {
-    SVGLoader.createShapes(path).forEach((shape) => {
+    sceneShapes(path).forEach((shape) => {
       const points = shape.extractPoints(8).shape;
       if (!points.length) return;
-      const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
-      const world = worldPoint(center);
-      const variant = planted % factories.length;
-      const tree = factories[variant]();
-      const scale = 0.22 + (planted % 3) * 0.035;
-      tree.scale.setScalar(scale);
-      tree.position.set(world.x, HEIGHT_UNIT + 0.1, world.y);
-      tree.rotation.y = planted * 1.7;
-      tree.traverse((object) => {
-        if (object.isMesh) { object.castShadow = false; object.receiveShadow = true; }
-      });
-      map.add(tree);
-      plantingTrees.push({ tree, scale, profile: profiles[variant] });
-      planted += 1;
+      const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
+      const step = 75;
+      const shapeStart = planted;
+      const addTree = (sourcePoint) => {
+        const world = worldPoint(sourcePoint);
+        const variant = planted % factories.length;
+        const tree = factories[variant]();
+        const scale = 0.22 + (planted % 3) * 0.035;
+        tree.scale.setScalar(scale);
+        tree.position.set(world.x, HEIGHT_UNIT + 0.1, world.y);
+        tree.rotation.y = planted * 1.7;
+        tree.traverse((object) => {
+          if (object.isMesh) { object.castShadow = false; object.receiveShadow = true; }
+        });
+        map.add(tree);
+        plantingTrees.push({ tree, scale, profile: profiles[variant] });
+        planted += 1;
+      };
+      const areaMarkers = markers.filter((marker) => isInsidePolygon(marker, points));
+      areaMarkers.forEach(addTree);
+      if (areaMarkers.length) return;
+      for (let y = bounds.min.y; y <= bounds.max.y; y += step) {
+        for (let x = bounds.min.x; x <= bounds.max.x; x += step) {
+          const sourcePoint = new THREE.Vector2(x, y);
+          if (!isInsidePolygon(sourcePoint, points)) continue;
+          addTree(sourcePoint);
+        }
+      }
+      if (planted === shapeStart) {
+        const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
+        addTree(center);
+      }
     });
   });
 }
 
-function addFence(path) {
+function mergeFenceParts(geometries, material, group, { castShadow = false, renderOrder } = {}) {
+  if (!geometries.length) return;
+  const geometry = mergeGeometries(geometries, false);
+  geometries.forEach((source) => source.dispose());
+  if (!geometry) return;
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = castShadow;
+  mesh.receiveShadow = castShadow;
+  if (renderOrder !== undefined) mesh.renderOrder = renderOrder;
+  group.add(mesh);
+}
+
+function addFence(paths) {
   const postMaterial = new THREE.MeshStandardMaterial({ color: 0x4e5554, roughness: 0.72, metalness: 0.82 });
   const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x4e413c, roughness: 0.95 });
-  path.subPaths.forEach((subPath) => {
-    const sourcePoints = subPath.getPoints(8);
-    if (sourcePoints.length < 2) return;
-    const points = sourcePoints.map((point) => {
+  const posts = [];
+  const boards = [];
+  paths.forEach((path) => path.subPaths.forEach((subPath) => {
+    const points = subPath.getPoints(8).map((point) => {
       const world = worldPoint(point);
       return new THREE.Vector3(world.x, 0, world.y);
     });
@@ -711,32 +818,34 @@ function addFence(path) {
       const end = points[index + 1];
       const segment = new THREE.Vector3().subVectors(end, start);
       const length = segment.length();
+      const direction = segment.clone().normalize();
+      const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction);
       const steps = Math.max(1, Math.ceil(length / 2.1));
       for (let step = 0; step < steps; step += 1) {
-        const post = start.clone().lerp(end, step / steps);
-        const postMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.98, 0.04), postMaterial);
-        postMesh.position.set(post.x, 0.49, post.z);
-        postMesh.castShadow = true;
-        villageFence.add(postMesh);
+        const position = start.clone().lerp(end, step / steps);
+        const geometry = new THREE.BoxGeometry(0.04, 0.98, 0.04);
+        geometry.applyMatrix4(new THREE.Matrix4().compose(position.setY(0.49), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)));
+        posts.push(geometry);
       }
-      const boardDirection = segment.clone().normalize();
       [0.28, 0.46, 0.64, 0.82].forEach((height) => {
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(length, 0.14, 0.014), boardMaterial);
-        rail.position.copy(start).add(end).multiplyScalar(0.5);
-        rail.position.y = height;
-        rail.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), boardDirection);
-        villageFence.add(rail);
+        const geometry = new THREE.BoxGeometry(length, 0.14, 0.014);
+        geometry.applyMatrix4(new THREE.Matrix4().compose(start.clone().add(end).multiplyScalar(0.5).setY(height), quaternion, new THREE.Vector3(1, 1, 1)));
+        boards.push(geometry);
       });
     }
-  });
+  }));
+  mergeFenceParts(posts, postMaterial, villageFence, { castShadow: true });
+  mergeFenceParts(boards, boardMaterial, villageFence);
 }
 
-function addInnerFence(path) {
+function addInnerFence(paths) {
   const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x777b7a, roughness: 0.9 });
   const supportMaterial = new THREE.MeshStandardMaterial({ color: 0x606463, roughness: 0.88, metalness: 0.15 });
   const boardWidth = 0.06;
   const fenceHeight = 0.4116;
-  path.subPaths.forEach((subPath) => {
+  const boards = [];
+  const supports = [];
+  paths.forEach((path) => path.subPaths.forEach((subPath) => {
     const sourcePoints = subPath.getPoints(8);
     if (sourcePoints.length < 2) return;
     const points = sourcePoints.map((point) => {
@@ -749,31 +858,40 @@ function addInnerFence(path) {
       const segment = new THREE.Vector3().subVectors(end, start);
       const length = segment.length();
       const direction = segment.clone().normalize();
-      const segmentCenter = start.clone().add(end).multiplyScalar(0.5);
-      if (gateOpeningCenters.some((opening) => opening.distanceTo(segmentCenter) < 0.28)) continue;
-      const boardPitch = boardWidth * 2;
-      const boardCount = Math.max(1, Math.ceil(length / boardPitch));
-      for (let boardIndex = 0; boardIndex < boardCount; boardIndex += 1) {
-        const board = new THREE.Mesh(new THREE.BoxGeometry(boardWidth, fenceHeight, 0.014), boardMaterial);
-        board.position.copy(start).add(end).multiplyScalar(0.5);
-        board.position.add(direction.clone().multiplyScalar((boardIndex + 0.5) * length / boardCount - length / 2));
-        board.position.y = fenceHeight / 2;
-        board.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction);
-        innerFence.add(board);
-      }
-      [0.1176, 0.3108].forEach((height) => {
-        const support = new THREE.Mesh(new THREE.BoxGeometry(length, 0.0275, 0.01375), supportMaterial);
-        support.position.copy(start).add(end).multiplyScalar(0.5);
-        support.position.y = height;
-        support.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction);
-        innerFence.add(support);
+      // Build every SVG segment. Gate openings are separate objects and must
+      // not remove complete fence fragments that happen to pass nearby.
+      [[0, length]].forEach(([from, to]) => {
+        const intervalLength = to - from;
+        if (intervalLength <= 0.01) return;
+        const intervalStart = start.clone().add(direction.clone().multiplyScalar(from));
+        const intervalEnd = start.clone().add(direction.clone().multiplyScalar(to));
+        const boardPitch = boardWidth * 2;
+        const boardCount = Math.max(1, Math.ceil(intervalLength / boardPitch));
+        for (let boardIndex = 0; boardIndex < boardCount; boardIndex += 1) {
+          const board = new THREE.BoxGeometry(boardWidth, fenceHeight, 0.014);
+          board.applyMatrix4(new THREE.Matrix4().compose(
+            intervalStart.clone().add(intervalEnd).multiplyScalar(0.5).add(direction.clone().multiplyScalar((boardIndex + 0.5) * intervalLength / boardCount - intervalLength / 2)).setY(fenceHeight / 2 + 0.006),
+            new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction), new THREE.Vector3(1, 1, 1),
+          ));
+          boards.push(board);
+        }
+        [0.1176, 0.3108].forEach((height) => {
+          const support = new THREE.BoxGeometry(intervalLength, 0.0275, 0.01375);
+          support.applyMatrix4(new THREE.Matrix4().compose(
+            intervalStart.clone().add(intervalEnd).multiplyScalar(0.5).setY(height + 0.006),
+            new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction), new THREE.Vector3(1, 1, 1),
+          ));
+          supports.push(support);
+        });
       });
     }
-  });
+  }));
+  mergeFenceParts(boards, boardMaterial, innerFence, { renderOrder: 32 });
+  mergeFenceParts(supports, supportMaterial, innerFence, { renderOrder: 32 });
 }
 
 function addConcreteGate(path) {
-  const shape = SVGLoader.createShapes(path)[0];
+  const shape = sceneShapes(path)[0];
   if (!shape) return;
   const points = shape.extractPoints(4).shape;
   if (points.length < 4) return;
@@ -798,43 +916,6 @@ function addConcreteGate(path) {
   addBox(new THREE.BoxGeometry(0.06, 0.49, 0.11), [0.085, 0.245, 0]);
   addBox(new THREE.BoxGeometry(0.23, 0.06, 0.11), [0, 0.46, 0]);
   map.add(group);
-}
-
-function addForestFence(path) {
-  const postMaterial = new THREE.MeshStandardMaterial({ color: 0x1f4d32, roughness: 0.72, metalness: 0.72 });
-  const rodMaterial = new THREE.MeshStandardMaterial({ color: 0x1f4d32, roughness: 0.8, metalness: 0.45 });
-  const fenceHeight = 0.98;
-  const postSpacing = 2.1;
-  const rodSpacing = 0.22;
-  path.subPaths.forEach((subPath) => {
-    const sourcePoints = subPath.getPoints(8);
-    if (sourcePoints.length < 2) return;
-    const points = sourcePoints.map((point) => {
-      const world = worldPoint(point);
-      return new THREE.Vector3(world.x, 0, world.y);
-    });
-    for (let index = 0; index < points.length - 1; index += 1) {
-      const start = points[index];
-      const end = points[index + 1];
-      const segment = new THREE.Vector3().subVectors(end, start);
-      const length = segment.length();
-      const direction = segment.clone().normalize();
-      const postCount = Math.max(1, Math.ceil(length / postSpacing));
-      for (let postIndex = 0; postIndex < postCount; postIndex += 1) {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.04, fenceHeight, 0.04), postMaterial);
-        post.position.copy(start).add(direction.clone().multiplyScalar((postIndex + 0.5) * length / postCount));
-        post.position.y = fenceHeight / 2;
-        forestFence.add(post);
-      }
-      const rodCount = Math.max(1, Math.ceil(length / rodSpacing));
-      for (let rodIndex = 0; rodIndex < rodCount; rodIndex += 1) {
-        const rod = new THREE.Mesh(new THREE.BoxGeometry(0.018, fenceHeight, 0.018), rodMaterial);
-        rod.position.copy(start).add(direction.clone().multiplyScalar((rodIndex + 0.5) * length / rodCount));
-        rod.position.y = fenceHeight / 2;
-        forestFence.add(rod);
-      }
-    }
-  });
 }
 
 function queueStrokeType(path) {
@@ -935,7 +1016,7 @@ function extractCarRoute(parsed) {
 }
 
 function addEntranceGroup(path) {
-  const shape = SVGLoader.createShapes(path)[0];
+  const shape = sceneShapes(path)[0];
   if (!shape) return;
   const points = shape.extractPoints(4).shape;
   if (points.length < 4) return;
@@ -995,7 +1076,7 @@ function addEntranceLogo(svgText) {
 }
 
 function addEntranceGate(path) {
-  const shape = SVGLoader.createShapes(path)[0];
+  const shape = sceneShapes(path)[0];
   if (!shape) return;
   const points = shape.extractPoints(4).shape;
   const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
@@ -1080,8 +1161,16 @@ function seedFruitTrees() {
   const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
   const factories = [createFruitTree1, createFruitTree2, createFruitTree3];
   const baseY = layers["#EAE3CA"].elevation + layers["#EAE3CA"].height + 0.02;
-  orchardMarks.forEach((sourcePoint, planted) => {
-    if (!isInsidePolygon(sourcePoint, polygon)) return;
+  const marks = orchardMarks.filter((point) => isInsidePolygon(point, polygon));
+  if (marks.length === 0) {
+    for (let y = bounds.min.y; y <= bounds.max.y; y += 1.8) {
+      for (let x = bounds.min.x; x <= bounds.max.x; x += 1.8) {
+        const point = new THREE.Vector2(x, y);
+        if (isInsidePolygon(point, polygon)) marks.push(point);
+      }
+    }
+  }
+  marks.forEach((sourcePoint, planted) => {
     const point = worldPoint(sourcePoint);
     const tree = factories[planted % factories.length]();
     tree.scale.setScalar(0.345 + (planted % 3) * 0.03);
@@ -1179,13 +1268,15 @@ function addHouse(spec) {
     const roofHeight = 0.4;
     const house = createHouseModel(width, depth);
     group.add(house);
-    const light = new THREE.PointLight(0xffb56b, 0, 4.5, 2);
-    light.position.set(0, 0.7, 0);
-    light.castShadow = false;
-    group.add(light);
     map.add(group);
-    houseLights.push({ light, materials: [house.material] });
-    const glow = new THREE.Mesh(new THREE.CircleGeometry(1, 16), houseGlowMaterial);
+    const turnOnAfter = 10 + Math.random() * 20;
+    houseLights.push({
+      mesh: house,
+      isOn: false,
+      turnOnAfter,
+      turnOffAfter: turnOnAfter + 60 + Math.random() * 240,
+    });
+    const glow = new THREE.Mesh(houseGlowGeometry, houseGlowMaterial);
     glow.rotation.x = -Math.PI / 2;
     glow.position.set(center.x, layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.012, center.y);
     glow.scale.set(1.35, 1.35, 1);
@@ -1203,6 +1294,10 @@ function addHouse(spec) {
 }
 
 function setCachedHouseShadow(shadow, points) {
+  if (!Array.isArray(points) || points.length < 3 || points.some(([x, z]) => !Number.isFinite(x) || !Number.isFinite(z))) {
+    shadow.visible = false;
+    return;
+  }
   const positions = new Float32Array(points.length * 3);
   points.forEach(([x, z], index) => {
     positions[index * 3] = x;
@@ -1233,6 +1328,11 @@ function updateHouseShadows() {
   const surfaceOffset = Math.max(0.004, cameraDistance * 0.00018);
   const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + surfaceOffset;
   const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
+  // A horizontal sun direction cannot produce a finite ground projection.
+  if (!Number.isFinite(direction.y) || Math.abs(direction.y) < 0.0001) {
+    houseShadows.forEach(({ shadow }) => { shadow.visible = false; });
+    return;
+  }
   const standardSun = sun.position.distanceTo(new THREE.Vector3(-45, 80, 45)) < 0.001;
   houseShadows.forEach(({ group, width, depth, bodyHeight, roofHeight, shadow, shadowIndex }) => {
     shadow.visible = direction.y > -0.12;
@@ -1250,6 +1350,10 @@ function updateHouseShadows() {
       return new THREE.Vector2(point.x + direction.x * distance, point.z + direction.z * distance);
     });
     const hull = convexHull(projected);
+    if (hull.length < 3 || hull.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+      shadow.visible = false;
+      return;
+    }
     const positions = new Float32Array(hull.length * 3);
     hull.forEach((point, index) => { positions[index * 3] = point.x; positions[index * 3 + 1] = groundY; positions[index * 3 + 2] = point.y; });
     shadow.geometry.dispose();
@@ -1343,17 +1447,22 @@ function updateHouseLights() {
     : 0;
   houseLights.forEach((house) => {
     const scheduledOn = nightScheduleActive && nightMinutes >= house.turnOnAfter && nightMinutes < house.turnOffAfter;
-    const intensity = scheduledOn ? night : 0;
-    house.light.intensity = 2.6 * intensity;
-    house.materials.forEach((material) => { material.emissiveIntensity = 0.56 * intensity; });
+    if (scheduledOn !== house.isOn) {
+      house.mesh.material = scheduledOn ? houseOnMaterial : houseOffMaterial;
+      house.isOn = scheduledOn;
+    }
   });
+  if (houseOnMaterial) houseOnMaterial.emissiveIntensity = 0.56 * night;
   houseGlowMaterial.opacity = 0.84 * night;
+  const cameraDistance = camera.position.distanceTo(controls.target);
+  const glowY = layers["#CD80DD"].elevation
+    + layers["#CD80DD"].height
+    + Math.max(0.004, cameraDistance * 0.00018);
   houseGlows.forEach((glow, index) => {
     const house = houseLights[index];
     const scheduledOn = nightScheduleActive && house && nightMinutes >= house.turnOnAfter && nightMinutes < house.turnOffAfter;
     glow.visible = scheduledOn && night > 0.001;
-    const cameraDistance = camera.position.distanceTo(controls.target);
-    glow.position.y = layers["#CD80DD"].elevation + layers["#CD80DD"].height + Math.max(0.004, cameraDistance * 0.00018);
+    glow.position.y = glowY;
   });
   lastDaylightLevel = daylightLevel;
 }
@@ -1430,7 +1539,7 @@ function registerForestZones(paths) {
   paths.forEach((path) => {
     const fill = fillOf(path);
     if (!forestZonePolygons[fill]) return;
-    SVGLoader.createShapes(path).forEach((polygonShape) => {
+    sceneShapes(path).forEach((polygonShape) => {
       const polygon = polygonShape.extractPoints(8).shape;
       const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
       forestPolygons.push(polygon);
@@ -1487,14 +1596,16 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
       direction,
     };
   }).filter(Boolean);
+  let poleNumber = 0;
   lightPolePaths.forEach((path) => {
-    SVGLoader.createShapes(path).forEach((shape) => {
+    sceneShapes(path).forEach((shape) => {
       const points = shape.extractPoints(4).shape;
       if (points.length < 3) return;
       const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
       const sourceCenter = bounds.getCenter(new THREE.Vector2());
       const center = worldPoint(sourceCenter);
       const pole = new THREE.Group();
+      poleNumber += 1;
       pole.position.set(center.x, poleBaseY, center.y);
       const nearestGuide = guides.reduce((best, guide) => {
         if (!best) return guide;
@@ -1504,6 +1615,9 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
         // The red base only locates the pole; its SVG rotation is ignored.
         // Orientation comes exclusively from the green guide line.
         pole.rotation.y = Math.atan2(-nearestGuide.direction.y, nearestGuide.direction.x);
+      }
+      if (poleNumber === 3) {
+        pole.rotation.y += Math.PI;
       }
       const poleSection = 0.08 / 1.5;
       const shaft = new THREE.Mesh(new THREE.BoxGeometry(poleSection, 1.35, poleSection), poleMaterial);
@@ -1515,6 +1629,11 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
       lamp.position.set(0.29, 1.35, 0);
       pole.add(shaft, arm, lamp);
       map.add(pole);
+      const poleLabel = document.createElement("div");
+      poleLabel.className = "pole-label";
+      poleLabel.textContent = String(poleNumber);
+      host.appendChild(poleLabel);
+      poleLabels.push({ pole, label: poleLabel });
       const light = new THREE.PointLight(0xffc36e, 0, 3.8, 2);
       light.position.set(0.29, 1.35, 0);
       pole.add(light);
@@ -1527,6 +1646,18 @@ function seedLightPoles(lightPolePaths, guidePaths = []) {
       map.add(glow);
       poleGlows.push(glow);
     });
+  });
+}
+
+function updatePoleLabels() {
+  poleLabels.forEach(({ pole, label }) => {
+    const point = new THREE.Vector3(0, 1.62, 0).applyMatrix4(pole.matrixWorld).project(camera);
+    const visible = point.z > -1 && point.z < 1;
+    label.style.display = visible ? "block" : "none";
+    if (visible) {
+      label.style.left = `${(point.x * 0.5 + 0.5) * host.clientWidth}px`;
+      label.style.top = `${(-point.y * 0.5 + 0.5) * host.clientHeight}px`;
+    }
   });
 }
 
@@ -1550,6 +1681,7 @@ async function seedPines() {
       import("../models/SupersimplePine3.js"),
     ]),
   ]);
+  plantingPineFactories = pineModules.map((module) => Object.values(module)[0]);
   const templates = pineModules.map((module) => Object.values(module)[0]());
   const batches = templates.map((template) => template.children.map((part, partIndex) => {
     const mesh = new THREE.InstancedMesh(part.geometry, partIndex === 0 ? forestSharedTrunkMaterial : forestSharedCrownMaterial, 1100);
@@ -1886,15 +2018,14 @@ function seedTrees() {
 }
 
 async function buildModel() {
-  const response = await fetch(planUrl);
-  if (!response.ok) throw new Error("SVG plan could not be loaded");
-  const svgText = await response.text();
-  const parsed = new SVGLoader().parse(svgText);
+  const paths = adaptSceneData(sceneData);
+  const parsed = { paths };
   const carRoute = extractCarRoute(parsed);
   parsed.paths.filter((path) => fillOf(path) === "#FF8C8C").forEach(addConcreteGate);
   const storeZonePath = parsed.paths.find((path) => fillOf(path) === "#DB6A6A");
-  storeZonePolygon = storeZonePath ? SVGLoader.createShapes(storeZonePath)[0]?.extractPoints(8).shape ?? null : null;
-  const plantingPaths = parsed.paths.filter((path) => fillOf(path) === "#9A0062");
+  storeZonePolygon = storeZonePath ? sceneShapes(storeZonePath)[0]?.extractPoints(8).shape ?? null : null;
+  const plantingPaths = parsed.paths.filter((path) => fillOf(path) === "#B4ED92");
+  const plantingMarkerPaths = parsed.paths.filter((path) => fillOf(path) === "#9A0062");
   parsed.paths.forEach((path) => {
     const queue = queueStrokeType(path);
     if (queue === "first") addQueueOutline(path, firstQueueOutline);
@@ -1905,8 +2036,8 @@ async function buildModel() {
   parsed.paths.filter((path) => fillOf(path) === "#B85555").forEach(addEntranceGate);
   const logoResponse = await fetch("./лого.svg");
   if (logoResponse.ok) addEntranceLogo(await logoResponse.text());
-  parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#055DC2").forEach(addFence);
-  parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#FF6043").forEach(addInnerFence);
+  addFence(parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#055DC2"));
+  addInnerFence(parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#FF6043"));
   const lightPolePaths = parsed.paths.filter((path) => fillOf(path) === "#A93030");
   const guidePaths = parsed.paths.filter((path) => {
     const style = path.userData?.style || {};
@@ -1921,18 +2052,19 @@ async function buildModel() {
     if (layers[fill]) addTerritory(path, layers[fill]);
   }
   registerForestZones(parsed.paths);
-  const houses = readHouses(svgText);
   const houseModule = await import("../models/house.js");
   createHouseModel = houseModule.createHouse;
+  houseOffMaterial = houseModule.houseOffMaterial;
+  houseOnMaterial = houseModule.houseOnMaterial;
   if (typeof createHouseModel !== "function") throw new Error("House model factory is unavailable");
-  for (let index = 0; index < houses.length; index += 1) {
+  for (let index = 0; index < houseLocations.length; index += 1) {
     if (index > 0 && index % 10 === 0) await yieldToBrowser();
-    addHouse(houses[index]);
+    addHouse(houseLocations[index]);
   }
   // Build lamp posts before the deferred forest generation so they are visible immediately.
   seedLightPoles(lightPolePaths, guidePaths);
   await seedPines();
-  addPlantingPines(plantingPaths);
+  addPlantingPines(plantingPaths, plantingMarkerPaths);
   map.updateMatrixWorld(true);
   updateFirstQueuePointer();
   updateHouseShadows();
@@ -1941,8 +2073,6 @@ async function buildModel() {
   seedCars(carRoute);
   seedFruitTrees();
   settlementBounds?.expandByScalar(6);
-  controls.target.copy(settlementTarget);
-  controls.update();
 }
 
 function setCamera(position) {
@@ -1951,7 +2081,7 @@ function setCamera(position) {
   controls.update();
 }
 
-document.querySelector("#reset-camera").addEventListener("click", () => setCamera([-17, 40, -42]));
+document.querySelector("#reset-camera").addEventListener("click", () => setCamera(DEFAULT_CAMERA_POSITION.toArray()));
 const firstQueueButton = document.querySelector("#first-queue");
 const firstQueueFlag = document.createElement("img");
 firstQueueFlag.className = "first-queue-flag";
@@ -2183,6 +2313,7 @@ function animate() {
       label.style.top = `${(-projected.y * 0.5 + 0.5) * host.clientHeight}px`;
     }
   });
+  updatePoleLabels();
   cloudGroup.children.forEach((cloud) => {
     cloud.position.x += cloud.userData.speed;
     if (cloud.position.x > 210) cloud.position.x = -210;
@@ -2199,5 +2330,6 @@ function animate() {
 buildModel().catch((error) => {
   console.error(error);
   console.error(error);
+  host.dataset.sceneError = error?.stack || String(error);
 });
 animate();
