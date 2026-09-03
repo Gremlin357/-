@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { SVGLoader } from "three/addons/loaders/SVGLoader.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { Sky } from "three/addons/objects/Sky.js";
 import { createCar1 } from "../models/car1.js";
 import { createCar2 } from "../models/car2.js";
 import { createCar3 } from "../models/car3.js";
@@ -17,6 +16,7 @@ import { createSwings } from "../models/swings.js";
 import { houseShadows as cachedHouseShadows } from "../models/shadows.js";
 import { houseLocations } from "./houseLocations.js";
 import { sceneData } from "./sceneData.js";
+import { firstQueueFlagUrl, secondQueueFlagUrl, thirdQueueFlagUrl } from "./queueFlagAssets.js";
 const host = document.querySelector("#scene");
 const DEVELOPER_TOOLS_COMMAND = "покажи инструменты разработчика";
 const HIDE_DEVELOPER_TOOLS_COMMAND = "спрячь инструменты разработчика";
@@ -52,7 +52,11 @@ host.appendChild(plotLabel);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xc9dce1);
-scene.fog = new THREE.Fog(0xc9dce1, 135, 270);
+// Protected visual settings: change only after explicit confirmation.
+const GROUND_FOG_PEAK_DENSITY = 0.012;
+const GROUND_FOG_COLOR = new THREE.Color(0xffffff);
+scene.fog = new THREE.FogExp2(0xffffff, 0);
+const DAWN_FOG_COLOR = new THREE.Color(0xf4f7f4);
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(-17, 40, -42);
 const DEFAULT_CAMERA_TARGET = new THREE.Vector3(7, -6, 7);
 const camera = new THREE.PerspectiveCamera(41, host.clientWidth / host.clientHeight, 0.1, 500);
@@ -106,15 +110,6 @@ sun.shadow.camera.far = 220;
 sun.shadow.bias = -0.00015;
 sun.shadow.normalBias = 0.025;
 scene.add(sun);
-
-const sky = new Sky();
-sky.scale.setScalar(450);
-sky.material.uniforms.turbidity.value = 8;
-sky.material.uniforms.rayleigh.value = 1.6;
-sky.material.uniforms.mieCoefficient.value = 0.006;
-sky.material.uniforms.mieDirectionalG.value = 0.82;
-sky.material.uniforms.sunPosition.value.copy(sun.position).normalize();
-sky.visible = false;
 
 function createNightSkyTexture() {
   const canvas = document.createElement("canvas");
@@ -265,6 +260,7 @@ function createMoonTexture() {
   context.fillRect(0, 0, 128, 128);
   return new THREE.CanvasTexture(canvas);
 }
+
 const moonSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: createMoonTexture(), transparent: true, depthWrite: false, opacity: 0 }));
 moonSprite.position.set(72, 92, -72);
 moonSprite.scale.setScalar(24);
@@ -301,26 +297,41 @@ function setSunPhase(phase) {
       const t = THREE.MathUtils.smoothstep((Math.PI - sunPhase) / (Math.PI / 2), 0, 0.28);
       sunColor = dawn.clone().lerp(noon, t);
     } else {
-      // Zenith to west: white daylight fades into orange sunset.
-      const t = THREE.MathUtils.smoothstep(sunPhase / (Math.PI / 2), 0, 0.24);
+      // Zenith to west: start warming while the sun still has enough intensity.
+      const t = THREE.MathUtils.smoothstep(sunPhase / (Math.PI / 2), 0.1, 0.78);
       sunColor = dusk.clone().lerp(noon, t);
     }
   }
   sun.color.copy(sunColor);
-  const nightAmount = THREE.MathUtils.smoothstep(1 - daylightCurve, 0.08, 0.72);
-  const skyColor = new THREE.Color(0xc9dce1).lerp(new THREE.Color(0x071326), nightAmount);
+  const nightAmount = 1 - THREE.MathUtils.smoothstep(daylightCurve, 0.015, 0.55);
+  const sunsetWarmth = height > 0 && sunPhase < Math.PI / 2
+    ? 1 - THREE.MathUtils.smoothstep(sunPhase / (Math.PI / 2), 0.1, 0.78)
+    : 0;
+  const daySkyColor = new THREE.Color(0xc9dce1).lerp(dusk, sunsetWarmth * 0.3);
+  const skyColor = daySkyColor.lerp(new THREE.Color(0x071326), nightAmount);
   scene.background = skyColor;
-  scene.fog.color.copy(skyColor);
   nightSky.visible = false;
   nightStars.visible = true;
   nightStars.material.opacity = 0.9 * nightAmount;
-  sun.intensity = daylight > 0 ? 0.35 + daylightCurve * 3.45 : 0;
-  ambientLight.intensity = daylight > 0 ? 0.48 + daylightCurve * 1.62 : 0.32;
-  moonLight.intensity = (1 - daylight) * 0.22;
+  sun.intensity = daylightCurve * 3.8;
+  ambientLight.intensity = 0.32 + daylightCurve * 1.78;
+  ambientLight.color.copy(noon).lerp(dusk, sunsetWarmth * 0.38);
+  ambientLight.groundColor.set(0x758775).lerp(new THREE.Color(0x705446), sunsetWarmth * 0.25);
+  moonLight.intensity = nightAmount * 0.22;
+  cloudShadowGroup.children.forEach((shadow) => {
+    shadow.visible = daylightCurve > 0.001;
+    shadow.material.opacity = 0.52 * daylightCurve;
+  });
   sunSprite.position.copy(sun.position).multiplyScalar(1.35);
-  sunSprite.material.opacity = daylight > 0.015 ? Math.min(1, daylight * 3) : 0;
-  moonSprite.material.opacity = daylight < 0.12 ? Math.min(0.8, (0.12 - daylight) * 7) : 0;
-  sky.material.uniforms.sunPosition.value.copy(sun.position).normalize();
+  sunSprite.material.opacity = THREE.MathUtils.smoothstep(daylight, 0.005, 0.16);
+  moonSprite.material.opacity = nightAmount * 0.8;
+  const threeHours = Math.PI / 4;
+  const oneHour = Math.PI / 12;
+  const mistFadeIn = 1 - THREE.MathUtils.smoothstep(sunPhase, Math.PI + oneHour, Math.PI + threeHours);
+  const mistFadeOut = THREE.MathUtils.smoothstep(sunPhase, Math.PI - oneHour * 0.7, Math.PI - oneHour * 0.35);
+  const mistIntensity = mistFadeIn * mistFadeOut;
+  scene.fog.density = mistIntensity * GROUND_FOG_PEAK_DENSITY;
+  scene.fog.color.copy(GROUND_FOG_COLOR);
   sunDialDot.style.left = `${50 + horizontal * 42}%`;
   sunDialDot.style.top = `${50 - height * 42}%`;
 }
@@ -356,9 +367,6 @@ let nightScheduleActive = false;
 const plantingTrees = [];
 let plantingPineFactories = [];
 const plantingShadows = [];
-const forestShadowRecords = [];
-let forestShadowMesh = null;
-const forestShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.16, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
 const plantingShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.18, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
 const glowCanvas = document.createElement("canvas");
 glowCanvas.width = 128;
@@ -408,7 +416,6 @@ const innerFence = new THREE.Group();
 map.add(innerFence);
 const gateOpeningCenters = [];
 const publicMeshes = [];
-let storeZonePolygon = null;
 const movingCars = [];
 const publicLabels = ["Спортивная площадка", "Магазин", "Фруктовый сад", "Детская площадка", null, null];
 const firstQueueNumbers = new Map([
@@ -419,28 +426,8 @@ const firstQueuePlotData = new Map(firstQueuePlots.map((plot) => [plot.number, p
 let hoveredPlot = null;
 const pointer = new THREE.Vector2();
 const raycaster = new THREE.Raycaster();
-const environment = new THREE.Group();
-scene.add(environment);
-
-const horizonTrunk = new THREE.InstancedMesh(
-  new THREE.CylinderGeometry(0.14, 0.22, 2.2, 6),
-  new THREE.MeshBasicMaterial({ color: 0x76502f, depthTest: false, depthWrite: false }),
-  900,
-);
-const horizonCrown = new THREE.InstancedMesh(
-  new THREE.ConeGeometry(0.48, 1.2, 6),
-  new THREE.MeshStandardMaterial({ color: 0x477a55, roughness: 1 }),
-  900,
-);
-const horizonMatrix = new THREE.Matrix4();
-horizonTrunk.renderOrder = 20;
-environment.add(horizonTrunk, horizonCrown);
-horizonTrunk.visible = false;
-horizonCrown.visible = false;
 const SVG_W = 10144;
 const SVG_H = 3831;
-const SOURCE_SVG_W = 19911;
-const SOURCE_SVG_H = 19964;
 const WORLD_W = 160;
 const SCALE = WORLD_W / SVG_W;
 const SVG_OFFSET_X = 4961;
@@ -476,42 +463,8 @@ const layers = {
 };
 layers["#9AA0A3"].elevation = 0.085;
 layers["#B7DAD2"].elevation = 0.07;
-const forestPolygons = [];
-const forestPolygonBounds = [];
-const forestExpandedBounds = [];
 const forestZonePolygons = { "#59A37E": [], "#509874": [], "#498F6C": [] };
 const forestZoneBounds = { "#59A37E": [], "#509874": [], "#498F6C": [] };
-const treeTrunk = new THREE.MeshStandardMaterial({ color: 0x75583d, roughness: 0.9, depthTest: false, depthWrite: false });
-const treeCrowns = [
-  new THREE.MeshStandardMaterial({ color: 0x256b43, roughness: 0.92 }),
-  new THREE.MeshStandardMaterial({ color: 0x3d8252, roughness: 0.92 }),
-];
-const tallFirCrowns = [
-  new THREE.MeshStandardMaterial({ color: 0x1f603d, roughness: 0.92 }),
-  new THREE.MeshStandardMaterial({ color: 0x35764a, roughness: 0.92 }),
-];
-const forestInstances = new THREE.Group();
-forestInstances.visible = false;
-map.add(forestInstances);
-const instanceMatrix = new THREE.Matrix4();
-const regularTreeInstances = {
-  trunk: new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.18, 1.05, 7), treeTrunk, 7200),
-  lower: new THREE.InstancedMesh(new THREE.ConeGeometry(0.72, 1.15, 9), treeCrowns[0], 7200),
-  upper: new THREE.InstancedMesh(new THREE.ConeGeometry(0.5, 1.05, 9), treeCrowns[0], 7200),
-};
-const tallFirInstances = {
-  trunk: new THREE.InstancedMesh(new THREE.CylinderGeometry(0.1, 0.16, 1.25, 7), treeTrunk, 3600),
-  lower: new THREE.InstancedMesh(new THREE.ConeGeometry(0.52, 0.92, 8), tallFirCrowns[0], 3600),
-  middle: new THREE.InstancedMesh(new THREE.ConeGeometry(0.39, 0.88, 8), tallFirCrowns[0], 3600),
-  top: new THREE.InstancedMesh(new THREE.ConeGeometry(0.25, 0.78, 8), tallFirCrowns[0], 3600),
-};
-Object.values({ ...regularTreeInstances, ...tallFirInstances }).forEach((mesh) => {
-  mesh.castShadow = false;
-  mesh.receiveShadow = true;
-  forestInstances.add(mesh);
-});
-regularTreeInstances.trunk.renderOrder = 20;
-tallFirInstances.trunk.renderOrder = 20;
 
 function fillOf(path) {
   const value = String(path.userData?.style?.fill || "").trim().toUpperCase();
@@ -594,32 +547,11 @@ function adaptSceneData(data) {
   }));
 }
 
-function isHouse(path) {
-  const fill = fillOf(path);
-  return fill === "WHITE" || fill === "#FFFFFF";
-}
-
 function worldPoint(point) {
   return new THREE.Vector2(
     (SVG_W / 2 - (point.x - SVG_OFFSET_X)) * SCALE,
     (SVG_H / 2 - (point.y - SVG_OFFSET_Y)) * SCALE,
   );
-}
-
-function extrudeShape(shape, height, material) {
-  const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: height,
-    bevelEnabled: false,
-    curveSegments: 2,
-  });
-  geometry.translate(-SVG_OFFSET_X, -SVG_OFFSET_Y, 0);
-  geometry.scale(-SCALE, SCALE, 1);
-  geometry.rotateX(-Math.PI / 2);
-  geometry.translate(SVG_W * SCALE / 2, 0, SVG_H * SCALE / 2);
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.receiveShadow = true;
-  mesh.castShadow = height > 0.75;
-  return mesh;
 }
 
 function flatTexturedShape(shape, material) {
@@ -722,20 +654,6 @@ function addTerritory(path, definition) {
     }
     if (definition.isSubstation) addSubstation(shape, definition.elevation + definition.height);
   });
-  if ([0x59a37e, 0x509874, 0x498f6c].includes(definition.color)) {
-    shapes.forEach((shape) => {
-      const polygon = shape.extractPoints(8).shape;
-      forestPolygons.push(polygon);
-      const zoneKey = Object.keys(forestZonePolygons).find((key) => layers[key]?.color === definition.color);
-      if (zoneKey) {
-        forestZonePolygons[zoneKey].push(polygon);
-        forestZoneBounds[zoneKey].push(polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2()));
-      }
-      const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
-      forestPolygonBounds.push(bounds);
-      forestExpandedBounds.push(bounds.clone().expandByScalar(Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y) * 0.1));
-    });
-  }
 }
 
 function addPlantingPines(paths, markerPaths = []) {
@@ -959,24 +877,11 @@ function createPlantingShadows() {
   });
 }
 
-function createForestShadows() {
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute([
-    -1, 0, 0, 1, 0, 0, 0, 0, 1,
-  ], 3));
-  geometry.setIndex([0, 1, 2]);
-  forestShadowMesh = new THREE.InstancedMesh(geometry, forestShadowMaterial, forestShadowRecords.length);
-  forestShadowMesh.count = forestShadowRecords.length;
-  forestShadowMesh.renderOrder = 21;
-  map.add(forestShadowMesh);
-}
-
 function addSubstation(shape, baseY) {
   const points = shape.extractPoints(8).shape;
   const bounds = points.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
   const center = worldPoint(bounds.getCenter(new THREE.Vector2()));
   const edge = points[1].clone().sub(points[0]);
-  const nextEdge = points[2].clone().sub(points[1]);
   const width = 0.3;
   const depth = 0.3;
   const rotation = -Math.atan2(edge.y, edge.x);
@@ -1404,30 +1309,6 @@ function updateHouseShadows() {
     shadow.geometry.setIndex(hull.slice(1, -1).flatMap((_, index) => [0, index + 1, index + 2]));
     shadow.geometry.computeBoundingSphere();
   });
-  if (forestShadowMesh) {
-    const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.001;
-    const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
-    const daylight = THREE.MathUtils.smoothstep(daylightLevel, 0, 1);
-    forestShadowMesh.visible = direction.y > 0 && daylight > 0.001;
-    forestShadowMaterial.opacity = 0.16 * daylight;
-    if (forestShadowMesh.visible) {
-      const horizontal = Math.hypot(direction.x, direction.z);
-      const matrix = new THREE.Matrix4();
-      forestShadowRecords.forEach(({ position, scale, radius, height }, index) => {
-        const shadowLength = Math.min(45, Math.max(0.05, (height * scale - (groundY - position.y)) * horizontal / Math.max(0.08, direction.y)));
-        const awayX = -direction.x / Math.max(0.001, horizontal);
-        const awayZ = -direction.z / Math.max(0.001, horizontal);
-        const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(awayX, awayZ));
-        matrix.compose(
-          new THREE.Vector3(position.x, groundY + 0.001, position.z),
-          rotation,
-          new THREE.Vector3(radius * scale, shadowLength, 1),
-        );
-        forestShadowMesh.setMatrixAt(index, matrix);
-      });
-      forestShadowMesh.instanceMatrix.needsUpdate = true;
-    }
-  }
 }
 
 function startNightSchedules() {
@@ -1485,30 +1366,11 @@ function updatePoleLights() {
     glow.visible = active && night > 0.001;
     glow.material.opacity = 0.84 * intensity;
   });
-  const cameraDistance = camera.position.distanceTo(controls.target);
   poleGlows.forEach((glow) => {
     glow.visible = active && night > 0.001;
     glow.material.opacity = 0.84 * intensity;
     glow.position.y = 0.09;
   });
-}
-
-function readHouses(svgText) {
-  const houses = [];
-  const rectPattern = /<rect\s+([^>]*\bfill="white"[^>]*)\/>/gi;
-  for (const match of svgText.matchAll(rectPattern)) {
-    const attrs = match[1];
-    const number = (name) => Number((attrs.match(new RegExp(`\\b${name}="([^"]+)"`)) || [])[1]);
-    const transform = (attrs.match(/transform="rotate\(([-\d.]+)/i) || [])[1];
-    const x = number("x");
-    const y = number("y");
-    const width = number("width");
-    const height = number("height");
-    if ([x, y, width, height].every(Number.isFinite)) {
-      houses.push({ x, y, width, height, rotation: Number(transform) || 0 });
-    }
-  }
-  return houses;
 }
 
 function isInsidePolygon(point, polygon) {
@@ -1524,14 +1386,7 @@ function isInsidePolygon(point, polygon) {
   return inside;
 }
 
-function pointInAnyForest(point) {
-  return forestPolygons.some((polygon, index) => forestPolygonBounds[index].containsPoint(point) && isInsidePolygon(point, polygon));
-}
-
 function registerForestZones(paths) {
-  forestPolygons.length = 0;
-  forestPolygonBounds.length = 0;
-  forestExpandedBounds.length = 0;
   Object.keys(forestZonePolygons).forEach((key) => {
     forestZonePolygons[key].length = 0;
     forestZoneBounds[key].length = 0;
@@ -1542,9 +1397,6 @@ function registerForestZones(paths) {
     sceneShapes(path).forEach((polygonShape) => {
       const polygon = polygonShape.extractPoints(8).shape;
       const bounds = polygon.reduce((box, point) => box.expandByPoint(point), new THREE.Box2());
-      forestPolygons.push(polygon);
-      forestPolygonBounds.push(bounds);
-      forestExpandedBounds.push(bounds.clone().expandByScalar(Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y) * 0.1));
       forestZonePolygons[fill].push(polygon);
       forestZoneBounds[fill].push(bounds);
     });
@@ -1826,195 +1678,6 @@ async function seedPines() {
     superBatches.forEach((parts, type) => parts.forEach((mesh) => { mesh.count = superCounts[type]; mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }));
     map.add(superTrees);
   }
-  return;
-
-  {
-  const random = (() => {
-    let value = 14051996;
-    return () => {
-      value = (value * 1664525 + 1013904223) >>> 0;
-      return value / 4294967296;
-    };
-  })();
-  const pineFactories = [createPine1, createPine2, createPine3];
-  const pineProfiles = [
-    { radius: 0.72, height: 3.05 },
-    { radius: 0.86, height: 2.875 },
-    { radius: 0.62, height: 1.975 },
-  ];
-  const lowPolyTemplate = new THREE.Group();
-  lowPolyTemplate.add(
-    Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 1.1, 3), treeTrunk), { position: new THREE.Vector3(0, 0.55, 0) }),
-    Object.assign(new THREE.Mesh(new THREE.ConeGeometry(0.72, 2.5, 4), treeCrowns[0]), { position: new THREE.Vector3(0, 1.8, 0) }),
-  );
-  const ultraLowPolyTemplate = new THREE.Group();
-  ultraLowPolyTemplate.add(
-    Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 1.1, 3), treeTrunk), { position: new THREE.Vector3(0, 0.55, 0) }),
-    Object.assign(new THREE.Mesh(new THREE.ConeGeometry(0.72, 2.5, 3), treeCrowns[1]), { position: new THREE.Vector3(0, 1.8, 0) }),
-  );
-  const templates = [pineFactories.map((factory) => factory())];
-  const capacities = [2000];
-  const pineBatches = templates.map((zoneTemplates, zoneIndex) => zoneTemplates.flatMap((template) => template.children.map((part) => {
-    const mesh = new THREE.InstancedMesh(part.geometry, part.material, capacities[zoneIndex]);
-    mesh.castShadow = false;
-    mesh.receiveShadow = true;
-    mesh.frustumCulled = false;
-    return mesh;
-  })));
-  const pines = new THREE.Group();
-  pines.visible = true;
-  pineBatches.flat().forEach((batch) => pines.add(batch));
-  const counts = [0];
-  const matrix = new THREE.Matrix4();
-  const forestBaseY = layers["#59A37E"].elevation + layers["#59A37E"].height;
-  let added = 0;
-  const zoneKeys = ["#59A37E"];
-  const zonePolygons = forestZonePolygons[zoneKeys[0]];
-  const zoneBounds = forestZoneBounds[zoneKeys[0]];
-  if (!zonePolygons.length) return;
-  for (let attempt = 0; counts[0] < capacities[0]; attempt += 1) {
-    if (attempt > 0 && attempt % 250 === 0) await yieldToBrowser();
-    const polygon = zonePolygons[attempt % zonePolygons.length];
-    const center = polygon.reduce((sum, vertex) => sum.add(vertex), new THREE.Vector2()).multiplyScalar(1 / polygon.length);
-    const vertex = polygon[Math.floor(random() * polygon.length)];
-    const source = center.clone().lerp(vertex, 0.35 + random() * 0.6);
-    const zoneIndex = 0;
-    const point = worldPoint(source);
-    const type = Math.floor(random() * pineFactories.length);
-    const pine = templates[zoneIndex][type];
-    const instance = counts[zoneIndex];
-    const scale = 0.55 + random() * 0.65;
-    forestShadowRecords.push({ position: new THREE.Vector3(point.x, forestBaseY, point.y), scale, ...pineProfiles[type] });
-    const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI * 2);
-    pine.children.forEach((part, partIndex) => {
-      matrix.compose(
-        new THREE.Vector3(point.x, forestBaseY + part.position.y * scale, point.y),
-        rotation,
-        new THREE.Vector3(scale, scale, scale),
-      );
-      const batchOffset = zoneIndex === 0
-        ? templates[0].slice(0, type).reduce((sum, template) => sum + template.children.length, 0)
-        : 0;
-      pineBatches[zoneIndex][batchOffset + partIndex].setMatrixAt(instance, matrix);
-    });
-    counts[zoneIndex] += 1;
-    added += 1;
-  }
-  pineBatches.forEach((batches, zoneIndex) => batches.forEach((batch) => {
-      batch.castShadow = false;
-    batch.receiveShadow = true;
-    batch.count = counts[zoneIndex];
-    batch.instanceMatrix.needsUpdate = true;
-    batch.computeBoundingSphere();
-  }));
-  map.add(pines);
-  pines.traverse((object) => {
-    if (object.isMesh) {
-      object.castShadow = false;
-      object.receiveShadow = true;
-    }
-  });
-}
-
-}
-
-function pointInExpandedForest(point) {
-  return forestPolygons.some((polygon, index) => {
-    if (!forestExpandedBounds[index].containsPoint(point)) return false;
-    const center = polygon.reduce((sum, vertex) => sum.add(vertex), new THREE.Vector2()).multiplyScalar(1 / polygon.length);
-    const expandedPoint = center.clone().add(point.clone().sub(center).multiplyScalar(1 / 1.2));
-    return isInsidePolygon(expandedPoint, polygon) && !isInsidePolygon(point, polygon);
-  });
-}
-
-function seedHorizonForest() {
-  const random = (() => {
-    let value = 7654321;
-    return () => {
-      value = (value * 1664525 + 1013904223) >>> 0;
-      return value / 4294967296;
-    };
-  })();
-  const forestBaseY = layers["#59A37E"].elevation + layers["#59A37E"].height;
-  let added = 0;
-  for (let attempt = 0; attempt < 180000 && added < 900; attempt += 1) {
-    const source = new THREE.Vector2(random() * SOURCE_SVG_W, random() * SOURCE_SVG_H);
-    if (!pointInExpandedForest(source)) continue;
-    const point = worldPoint(source);
-    const scale = 0.8 + random() * 0.6;
-    horizonMatrix.compose(new THREE.Vector3(point.x, forestBaseY + 1.1 * scale, point.y), new THREE.Quaternion(), new THREE.Vector3(scale, scale, scale));
-    horizonTrunk.setMatrixAt(added, horizonMatrix);
-    horizonMatrix.setPosition(point.x, forestBaseY + 2.4 * scale, point.y);
-    horizonCrown.setMatrixAt(added, horizonMatrix);
-    added += 1;
-  }
-  horizonTrunk.count = added;
-  horizonCrown.count = added;
-  horizonTrunk.instanceMatrix.needsUpdate = true;
-  horizonCrown.instanceMatrix.needsUpdate = true;
-  horizonTrunk.computeBoundingSphere();
-  horizonCrown.computeBoundingSphere();
-}
-
-function addTree(x, z, scale) {
-  const index = addTree.count;
-  const baseY = layers["#59A37E"].elevation + layers["#59A37E"].height;
-  const set = (mesh, y) => {
-    instanceMatrix.compose(new THREE.Vector3(x, baseY + y * scale, z), new THREE.Quaternion(), new THREE.Vector3(scale, scale, scale));
-    mesh.setMatrixAt(index, instanceMatrix);
-  };
-  set(regularTreeInstances.trunk, 0.53);
-  set(regularTreeInstances.lower, 2.05);
-  set(regularTreeInstances.upper, 2.65);
-  addTree.count += 1;
-}
-addTree.count = 0;
-
-function addTallFir(x, z, scale) {
-  const index = addTallFir.count;
-  const baseY = layers["#59A37E"].elevation + layers["#59A37E"].height;
-  const set = (mesh, y) => {
-    instanceMatrix.compose(new THREE.Vector3(x, baseY + y * scale, z), new THREE.Quaternion(), new THREE.Vector3(scale, scale, scale));
-    mesh.setMatrixAt(index, instanceMatrix);
-    mesh.instanceMatrix.needsUpdate = true;
-  };
-  set(tallFirInstances.trunk, 0.63);
-  set(tallFirInstances.lower, 1.4);
-  set(tallFirInstances.middle, 1.9);
-  set(tallFirInstances.top, 2.35);
-  addTallFir.count += 1;
-}
-addTallFir.count = 0;
-
-function seedTrees() {
-  const random = (() => {
-    let value = 31051991;
-    return () => {
-      value = (value * 1664525 + 1013904223) >>> 0;
-      return value / 4294967296;
-    };
-  })();
-  let firsAdded = 0;
-  let tallFirsAdded = 0;
-  for (let attempt = 0; attempt < 360000 && (firsAdded < 7200 || tallFirsAdded < 500); attempt += 1) {
-    const source = new THREE.Vector2(random() * SOURCE_SVG_W, random() * SOURCE_SVG_H);
-    if (!pointInAnyForest(source)) continue;
-    const point = worldPoint(source);
-    if (firsAdded < 7200) {
-      addTree(point.x, point.y, 0.6 + random() * 0.38);
-      firsAdded += 1;
-    } else if (tallFirsAdded < 500) {
-      addTallFir(point.x, point.y, 0.62 + random() * 0.36);
-      tallFirsAdded += 1;
-    }
-  }
-  Object.values(regularTreeInstances).forEach((mesh) => { mesh.count = firsAdded; });
-  Object.values(tallFirInstances).forEach((mesh) => { mesh.count = tallFirsAdded; });
-  Object.values({ ...regularTreeInstances, ...tallFirInstances }).forEach((mesh) => {
-    mesh.instanceMatrix.needsUpdate = true;
-  });
-  Object.values(regularTreeInstances).forEach((mesh) => mesh.computeBoundingSphere());
-  Object.values(tallFirInstances).forEach((mesh) => mesh.computeBoundingSphere());
 }
 
 async function buildModel() {
@@ -2022,8 +1685,6 @@ async function buildModel() {
   const parsed = { paths };
   const carRoute = extractCarRoute(parsed);
   parsed.paths.filter((path) => fillOf(path) === "#FF8C8C").forEach(addConcreteGate);
-  const storeZonePath = parsed.paths.find((path) => fillOf(path) === "#DB6A6A");
-  storeZonePolygon = storeZonePath ? sceneShapes(storeZonePath)[0]?.extractPoints(8).shape ?? null : null;
   const plantingPaths = parsed.paths.filter((path) => fillOf(path) === "#B4ED92");
   const plantingMarkerPaths = parsed.paths.filter((path) => fillOf(path) === "#9A0062");
   parsed.paths.forEach((path) => {
@@ -2085,7 +1746,7 @@ document.querySelector("#reset-camera").addEventListener("click", () => setCamer
 const firstQueueButton = document.querySelector("#first-queue");
 const firstQueueFlag = document.createElement("img");
 firstQueueFlag.className = "first-queue-flag";
-firstQueueFlag.src = "./1.svg?rev=1";
+firstQueueFlag.src = firstQueueFlagUrl;
 firstQueueFlag.alt = "";
 document.querySelector(".viewport").appendChild(firstQueueFlag);
 const firstQueueFlagBlur = document.createElement("div");
@@ -2183,10 +1844,11 @@ const extraQueueFlags = [
   { button: document.querySelector("#second-queue"), outline: secondQueueOutline, digit: "2", text: "<strong>очередь строительства</strong><br>отдельный въезд<br>39 домовладений<br>590 м.п. дорог<br>детская площадка" },
   { button: document.querySelector("#third-queue"), outline: thirdQueueOutline, digit: "3", text: "<strong>очередь строительства</strong><br>отдельный въезд<br>31 домовладение<br>410 м.п. дорог<br>спортивная площадка" },
 ];
+const queueFlagUrls = { 2: secondQueueFlagUrl, 3: thirdQueueFlagUrl };
 const forestSharedTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x75583d, roughness: 0.9 });
 const forestSharedCrownMaterial = new THREE.MeshStandardMaterial({ color: 0x347a46, roughness: 0.92 });
 extraQueueFlags.forEach((item) => {
-  item.flag = document.createElement("img"); item.flag.className = `queue-flag queue-flag-${item.digit}`; item.flag.src = `./${item.digit}.svg?rev=1`; item.flag.alt = "";
+  item.flag = document.createElement("img"); item.flag.className = `queue-flag queue-flag-${item.digit}`; item.flag.src = queueFlagUrls[item.digit]; item.flag.alt = "";
   item.textNode = document.createElement("div"); item.textNode.className = "queue-flag-text"; item.textNode.innerHTML = item.text;
   item.line = document.createElement("span"); item.line.className = "queue-flag-line"; item.dot = document.createElement("span"); item.dot.className = "queue-flag-dot";
   document.querySelector(".viewport").append(item.flag, item.textNode, item.line, item.dot);

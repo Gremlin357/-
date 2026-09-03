@@ -272,8 +272,8 @@ body.developer-tools-visible .pole-label { display: block !important; }
 .first-queue-flag-text.visible { display: block; }
 .first-queue-pointer-line,
 .first-queue-pointer-dot { position: absolute; z-index: 11; display: none; pointer-events: none; }
-.first-queue-pointer-line { height: 2px; transform-origin: 0 50%; background: #d7ffcd; box-shadow: 0 0 5px rgba(215, 255, 205, .85); }
-.first-queue-pointer-dot { width: 9px; height: 9px; margin: -4px 0 0 -4px; border-radius: 50%; background: #d7ffcd; box-shadow: 0 0 10px 3px rgba(215, 255, 205, .8); }
+.first-queue-pointer-line { height: 2px; transform-origin: 0 50%; background: #d7ffcd; }
+.first-queue-pointer-dot { width: 9px; height: 9px; margin: -4px 0 0 -4px; border-radius: 50%; background: #d7ffcd; }
 .first-queue-pointer-line.visible,
 .first-queue-pointer-dot.visible { display: block; }
 .queue-flag,.queue-flag-text,.queue-flag-line,.queue-flag-dot { position:absolute; z-index:10; display:none; pointer-events:none; }
