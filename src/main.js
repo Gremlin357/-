@@ -17,6 +17,7 @@ import { houseShadows as cachedHouseShadows } from "../models/shadows.js";
 import { houseLocations } from "./houseLocations.js";
 import { sceneData } from "./sceneData.js";
 import { firstQueueFlagUrl, secondQueueFlagUrl, thirdQueueFlagUrl } from "./queueFlagAssets.js";
+import entranceLogoSvg from "../лого.svg?raw";
 const host = document.querySelector("#scene");
 const DEVELOPER_TOOLS_COMMAND = "покажи инструменты разработчика";
 const HIDE_DEVELOPER_TOOLS_COMMAND = "спрячь инструменты разработчика";
@@ -56,7 +57,6 @@ scene.background = new THREE.Color(0xc9dce1);
 const GROUND_FOG_PEAK_DENSITY = 0.012;
 const GROUND_FOG_COLOR = new THREE.Color(0xffffff);
 scene.fog = new THREE.FogExp2(0xffffff, 0);
-const DAWN_FOG_COLOR = new THREE.Color(0xf4f7f4);
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(-17, 40, -42);
 const DEFAULT_CAMERA_TARGET = new THREE.Vector3(7, -6, 7);
 const camera = new THREE.PerspectiveCamera(41, host.clientWidth / host.clientHeight, 0.1, 500);
@@ -66,7 +66,7 @@ controls.target.copy(DEFAULT_CAMERA_TARGET);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.48;
 controls.minDistance = 30;
-controls.maxDistance = 140;
+controls.maxDistance = 80;
 controls.update();
 const MIN_CAMERA_HEIGHT = 0.2;
 let settlementBounds = null;
@@ -171,17 +171,28 @@ nightStars.visible = false;
 
 function createCloudTexture() {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 128;
+  canvas.width = 512;
+  canvas.height = 256;
   const context = canvas.getContext("2d");
-  context.fillStyle = "rgba(255, 255, 255, 0)";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "rgba(255, 255, 255, 0.78)";
-  [[52, 72, 34], [88, 52, 42], [132, 66, 48], [178, 76, 30]].forEach(([x, y, radius]) => {
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.filter = "blur(10px)";
+  [
+    [88, 144, 72, 0.58],
+    [158, 116, 88, 0.72],
+    [246, 128, 104, 0.78],
+    [340, 130, 78, 0.62],
+    [414, 150, 56, 0.45],
+  ].forEach(([x, y, radius, opacity]) => {
+    const gradient = context.createRadialGradient(x, y, radius * 0.15, x, y, radius);
+    gradient.addColorStop(0, `rgba(255, 255, 255, ${opacity})`);
+    gradient.addColorStop(0.68, `rgba(255, 255, 255, ${opacity * 0.42})`);
+    gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    context.fillStyle = gradient;
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
     context.fill();
   });
+  context.filter = "none";
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
@@ -203,40 +214,134 @@ function createSunTexture() {
 
 function createCloudShadowTexture() {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 128;
+  canvas.width = 512;
+  canvas.height = 256;
   const context = canvas.getContext("2d");
-  context.fillStyle = "rgba(38, 55, 50, 0.32)";
-  [[52, 72, 34], [88, 52, 42], [132, 66, 48], [178, 76, 30]].forEach(([x, y, radius]) => {
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.filter = "blur(18px)";
+  [
+    [102, 144, 82, 0.18],
+    [202, 128, 108, 0.22],
+    [322, 132, 96, 0.2],
+    [424, 148, 68, 0.14],
+  ].forEach(([x, y, radius, opacity]) => {
+    const gradient = context.createRadialGradient(x, y, radius * 0.1, x, y, radius);
+    gradient.addColorStop(0, `rgba(31, 48, 43, ${opacity})`);
+    gradient.addColorStop(0.72, `rgba(31, 48, 43, ${opacity * 0.34})`);
+    gradient.addColorStop(1, "rgba(31, 48, 43, 0)");
+    context.fillStyle = gradient;
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
     context.fill();
   });
-  return new THREE.CanvasTexture(canvas);
+  context.filter = "none";
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 const cloudGroup = new THREE.Group();
 const cloudTexture = createCloudTexture();
 const cloudShadowGroup = new THREE.Group();
 const cloudShadowTexture = createCloudShadowTexture();
-const cloudMaterial = new THREE.SpriteMaterial({ map: cloudTexture, transparent: true, depthWrite: false, opacity: 0.72 });
-for (let index = 0; index < 14; index += 1) {
+let groundSurfaceBounds = null;
+const cloudMaterial = new THREE.SpriteMaterial({ map: cloudTexture, transparent: true, depthWrite: false, opacity: 0.64, fog: false });
+const cloudShadowMaterial = new THREE.MeshBasicMaterial({
+  color: 0x2f443d,
+  map: cloudShadowTexture,
+  transparent: true,
+  depthWrite: false,
+  depthTest: false,
+  opacity: 0.38,
+  polygonOffset: true,
+  polygonOffsetFactor: -1,
+  polygonOffsetUnits: -1,
+});
+const cloudSpecs = [
+  [-185, 72, -104, 82, 34, 0.006],
+  [-118, 88, 16, 104, 42, 0.0045],
+  [-42, 66, 124, 92, 36, 0.0055],
+  [46, 94, -72, 120, 44, 0.004],
+  [132, 78, 58, 96, 38, 0.005],
+  [188, 86, -132, 108, 40, 0.0046],
+  [-224, 102, 118, 112, 42, 0.0038],
+  [226, 70, 156, 86, 34, 0.0058],
+  [-248, 82, -12, 94, 36, 0.0048],
+  [-156, 64, 178, 78, 30, 0.0062],
+  [-82, 104, -168, 116, 44, 0.0039],
+  [18, 76, 196, 98, 38, 0.0052],
+  [92, 62, -8, 84, 32, 0.006],
+  [166, 108, 118, 124, 46, 0.0036],
+  [254, 92, -48, 106, 40, 0.0044],
+  [-282, 68, -156, 88, 34, 0.0056],
+];
+function updateCloudShadowPosition(shadow) {
+  const data = shadow.userData;
+  const random = (value) => {
+    const result = Math.sin(value * 12.9898) * 43758.5453;
+    return result - Math.floor(result);
+  };
+  if (groundSurfaceBounds && !data.initialized) {
+    data.x = THREE.MathUtils.lerp(groundSurfaceBounds.min.x, groundSurfaceBounds.max.x, random(data.seed));
+    data.baseZ = THREE.MathUtils.lerp(groundSurfaceBounds.min.y, groundSurfaceBounds.max.y, random(data.seed + 17));
+    data.initialized = true;
+  }
+  const halfWidth = data.width * 0.5;
+  const fadeDistance = 24;
+  data.x += data.speed;
+  if (groundSurfaceBounds && data.x > groundSurfaceBounds.max.x + halfWidth) {
+    data.cycle += 1;
+    data.baseZ = THREE.MathUtils.lerp(
+      groundSurfaceBounds.min.y,
+      groundSurfaceBounds.max.y,
+      random(data.seed + data.cycle * 23),
+    );
+    data.speed = 0.09 + random(data.seed + data.cycle * 31) * 0.08;
+    data.x = groundSurfaceBounds.min.x + fadeDistance;
+    data.entryOpacity = 0;
+  }
+  if (groundSurfaceBounds) {
+    data.entryOpacity = Math.min(1, (data.entryOpacity ?? 1) + data.speed / fadeDistance);
+    const enterProgress = data.entryOpacity;
+    const exitProgress = 1 - THREE.MathUtils.smoothstep(
+      data.x,
+      groundSurfaceBounds.max.x + halfWidth - fadeDistance,
+      groundSurfaceBounds.max.x + halfWidth,
+    );
+    data.edgeOpacity = enterProgress * exitProgress;
+    shadow.material.opacity = data.baseOpacity * data.edgeOpacity;
+  }
+  shadow.position.x = data.x;
+  // Plot surfaces end at 0.18; keep the overlay just above them.
+  shadow.position.y = 0.186;
+  shadow.position.z = data.baseZ + Math.sin(data.x * 0.035 + data.phase) * 4;
+}
+cloudSpecs.forEach(([x, y, z, width, height, speed], index) => {
   const cloud = new THREE.Sprite(cloudMaterial);
-  cloud.position.set(-190 + index * 28, 48 + (index % 4) * 13, -110 + (index % 5) * 48);
-  cloud.scale.set(28 + (index % 3) * 12, 14 + (index % 2) * 6, 1);
-  cloud.userData.speed = 0.008 + (index % 3) * 0.003;
+  cloud.position.set(x, y, z);
+  cloud.scale.set(width, height, 1);
+  cloud.userData.speed = speed;
+  cloud.userData.width = width;
   cloudGroup.add(cloud);
 
   const shadow = new THREE.Mesh(
-    new THREE.PlaneGeometry(28 + (index % 3) * 12, 14 + (index % 2) * 6),
-    new THREE.MeshBasicMaterial({ color: 0x405a48, map: cloudShadowTexture, transparent: true, depthWrite: false, depthTest: false, opacity: 0.52 }),
+    new THREE.PlaneGeometry(width * 1.18, height * 1.45),
+    cloudShadowMaterial.clone(),
   );
   shadow.rotation.x = -Math.PI / 2;
-  shadow.position.set(cloud.position.x + 18, 1.08, cloud.position.z + 10);
   shadow.renderOrder = 8;
-  shadow.userData.cloud = cloud;
+  shadow.userData.x = -78 + (index % 8) * 22;
+  shadow.userData.baseZ = -24 + Math.floor(index / 8) * 34;
+  shadow.userData.speed = 0.09 + (index % 5) * 0.02;
+  shadow.userData.cycle = 0;
+  shadow.userData.phase = index * 1.7;
+  shadow.userData.seed = index + 1;
+  shadow.userData.width = width * 1.18;
+  shadow.userData.edgeOpacity = 0;
+  shadow.userData.baseOpacity = 0;
+  updateCloudShadowPosition(shadow);
   cloudShadowGroup.add(shadow);
-}
+});
 scene.add(cloudGroup);
 scene.add(cloudShadowGroup);
 
@@ -320,7 +425,8 @@ function setSunPhase(phase) {
   moonLight.intensity = nightAmount * 0.22;
   cloudShadowGroup.children.forEach((shadow) => {
     shadow.visible = daylightCurve > 0.001;
-    shadow.material.opacity = 0.52 * daylightCurve;
+    shadow.userData.baseOpacity = 0.62 * daylightCurve;
+    shadow.material.opacity = shadow.userData.baseOpacity * (shadow.userData.edgeOpacity ?? 1);
   });
   sunSprite.position.copy(sun.position).multiplyScalar(1.35);
   sunSprite.material.opacity = THREE.MathUtils.smoothstep(daylight, 0.005, 0.16);
@@ -364,10 +470,7 @@ const axisLabels = [];
 const entranceGateGroups = [];
 let lastDaylightLevel = daylightLevel;
 let nightScheduleActive = false;
-const plantingTrees = [];
 let plantingPineFactories = [];
-const plantingShadows = [];
-const plantingShadowMaterial = new THREE.MeshBasicMaterial({ color: 0x0b160f, transparent: true, opacity: 0.18, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
 const glowCanvas = document.createElement("canvas");
 glowCanvas.width = 128;
 glowCanvas.height = 128;
@@ -623,6 +726,8 @@ function addTerritory(path, definition) {
     polygonOffsetUnits: -1,
   });
   const shapes = sceneShapes(path);
+  if (!groundSurfaceBounds) groundSurfaceBounds = new THREE.Box2();
+  shapes.forEach((shape) => shape.extractPoints(8).shape.forEach((point) => groundSurfaceBounds.expandByPoint(worldPoint(point))));
   shapes.forEach((shape) => {
     const mesh = flatTexturedShape(shape, material);
     mesh.position.y = definition.elevation;
@@ -665,6 +770,7 @@ function addPlantingPines(paths, markerPaths = []) {
     { radius: 0.62, height: 1.975 },
   ];
   let planted = 0;
+  const placements = [];
   const markers = markerPaths.flatMap((path) => sceneShapes(path).map((shape) => {
     const points = shape.extractPoints(8).shape;
     return points.reduce((center, point) => center.add(point), new THREE.Vector2()).multiplyScalar(1 / points.length);
@@ -679,16 +785,9 @@ function addPlantingPines(paths, markerPaths = []) {
       const addTree = (sourcePoint) => {
         const world = worldPoint(sourcePoint);
         const variant = planted % factories.length;
-        const tree = factories[variant]();
         const scale = 0.22 + (planted % 3) * 0.035;
-        tree.scale.setScalar(scale);
-        tree.position.set(world.x, HEIGHT_UNIT + 0.1, world.y);
-        tree.rotation.y = planted * 1.7;
-        tree.traverse((object) => {
-          if (object.isMesh) { object.castShadow = false; object.receiveShadow = true; }
-        });
-        map.add(tree);
-        plantingTrees.push({ tree, scale, profile: profiles[variant] });
+        const position = new THREE.Vector3(world.x, HEIGHT_UNIT + 0.1, world.y);
+        placements.push({ variant, scale, rotation: planted * 1.7, position });
         planted += 1;
       };
       const areaMarkers = markers.filter((marker) => isInsidePolygon(marker, points));
@@ -707,6 +806,39 @@ function addPlantingPines(paths, markerPaths = []) {
       }
     });
   });
+
+  const templates = factories.map((factory) => factory());
+  const batches = templates.map((template) => template.children.map((part, partIndex) => {
+    const mesh = new THREE.InstancedMesh(part.geometry, part.material, planted);
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    return mesh;
+  }));
+  const counts = [0, 0, 0];
+  const matrix = new THREE.Matrix4();
+  const treeMatrix = new THREE.Matrix4();
+  const quaternion = new THREE.Quaternion();
+  const scaleVector = new THREE.Vector3();
+  placements.forEach(({ variant, scale, rotation, position }) => {
+    const instance = counts[variant]++;
+    quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotation);
+    scaleVector.setScalar(scale);
+    treeMatrix.compose(position, quaternion, scaleVector);
+    templates[variant].children.forEach((part, partIndex) => {
+      part.updateMatrix();
+      matrix.copy(treeMatrix).multiply(part.matrix);
+      batches[variant][partIndex].setMatrixAt(instance, matrix);
+    });
+  });
+  const instances = new THREE.Group();
+  batches.forEach((parts, variant) => parts.forEach((mesh) => {
+    mesh.count = counts[variant];
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    instances.add(mesh);
+  }));
+  map.add(instances);
 }
 
 function mergeFenceParts(geometries, material, group, { castShadow = false, renderOrder } = {}) {
@@ -860,20 +992,6 @@ function addQueueOutline(path, outlineGroup) {
     const line = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({ color: 0xd7ffcd, linewidth: 2, depthTest: true }));
     line.renderOrder = 111;
     outlineGroup.add(line);
-  });
-}
-
-function createPlantingShadows() {
-  // Keep planting shadows above the lower forest surface and plot/road surfaces,
-  // while remaining below house bases so they are visible without covering buildings.
-  const groundY = layers["#CD80DD"].elevation + layers["#CD80DD"].height + 0.001;
-  plantingTrees.forEach(({ tree, scale, profile }) => {
-    const shadow = new THREE.Mesh(new THREE.BufferGeometry(), plantingShadowMaterial);
-    // Shadow vertices are written in world coordinates, so the mesh stays at the origin.
-    shadow.position.set(0, 0, 0);
-    shadow.renderOrder = 22;
-    map.add(shadow);
-    plantingShadows.push({ tree, shadow, scale, profile, groundY });
   });
 }
 
@@ -1269,46 +1387,6 @@ function updateHouseShadows() {
     shadow.geometry.computeBoundingSphere();
     shadow.geometry.computeBoundingBox();
   });
-  plantingShadows.forEach(({ tree, shadow, scale, profile, groundY }) => {
-    const dayFactor = THREE.MathUtils.smoothstep(daylightLevel, 0, 1);
-    shadow.visible = sun.position.y > 0 && dayFactor > 0.001;
-    shadow.material.opacity = 0.18 * dayFactor;
-    if (!shadow.visible) return;
-    const direction = new THREE.Vector3().subVectors(sun.position, sun.target.position).normalize();
-    const baseRadius = profile.radius * scale * 0.72;
-    const apex = new THREE.Vector3(
-      tree.position.x,
-      tree.position.y + profile.height * scale,
-      tree.position.z,
-    );
-    const apexDistance = (groundY - apex.y) / direction.y;
-    const projectedApex = new THREE.Vector3(
-      apex.x + direction.x * apexDistance,
-      groundY,
-      apex.z + direction.z * apexDistance,
-    );
-    const points = [];
-    for (let index = 0; index < 8; index += 1) {
-      const angle = (index / 8) * Math.PI * 2;
-      points.push(new THREE.Vector2(
-        tree.position.x + Math.cos(angle) * baseRadius,
-        tree.position.z + Math.sin(angle) * baseRadius,
-      ));
-    }
-    points.push(new THREE.Vector2(projectedApex.x, projectedApex.z));
-    const hull = convexHull(points);
-    const positions = new Float32Array(hull.length * 3);
-    hull.forEach((point, index) => {
-      positions[index * 3] = point.x;
-      positions[index * 3 + 1] = groundY;
-      positions[index * 3 + 2] = point.y;
-    });
-    shadow.geometry.dispose();
-    shadow.geometry = new THREE.BufferGeometry();
-    shadow.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    shadow.geometry.setIndex(hull.slice(1, -1).flatMap((_, index) => [0, index + 1, index + 2]));
-    shadow.geometry.computeBoundingSphere();
-  });
 }
 
 function startNightSchedules() {
@@ -1695,8 +1773,7 @@ async function buildModel() {
   });
   parsed.paths.filter((path) => fillOf(path) === "#DB6A6A").forEach(addEntranceGroup);
   parsed.paths.filter((path) => fillOf(path) === "#B85555").forEach(addEntranceGate);
-  const logoResponse = await fetch("./лого.svg");
-  if (logoResponse.ok) addEntranceLogo(await logoResponse.text());
+  addEntranceLogo(entranceLogoSvg);
   addFence(parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#055DC2"));
   addInnerFence(parsed.paths.filter((path) => String(path.userData?.style?.stroke || "").replace(/\s/g, "").toUpperCase() === "#FF6043"));
   const lightPolePaths = parsed.paths.filter((path) => fillOf(path) === "#A93030");
@@ -1977,13 +2054,11 @@ function animate() {
   });
   updatePoleLabels();
   cloudGroup.children.forEach((cloud) => {
-    cloud.position.x += cloud.userData.speed;
+    cloud.position.x += cloud.userData.speed * 10;
     if (cloud.position.x > 210) cloud.position.x = -210;
   });
   cloudShadowGroup.children.forEach((shadow) => {
-    shadow.position.x = shadow.userData.cloud.position.x + 18;
-    shadow.position.y = 1.08;
-    shadow.position.z = shadow.userData.cloud.position.z + 10;
+    updateCloudShadowPosition(shadow);
   });
   renderer.render(scene, camera);
   requestAnimationFrame(animate);

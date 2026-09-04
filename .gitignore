@@ -1,4 +1,3 @@
-node_modules/
+генплан для Codex.svg
 dist/
-.vite/
-npm-debug.log*
+node_modules/
